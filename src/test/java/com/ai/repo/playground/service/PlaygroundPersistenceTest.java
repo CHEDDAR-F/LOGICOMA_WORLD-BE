@@ -340,7 +340,7 @@ class PlaygroundPersistenceTest {
     @Test void v6RepeatedReviewModelFailureKeepsSettlementAndLetsPartnerFinish() throws Exception {
         verifyAnnualRoom(false,true);
     }
-    void verifyAnnualRoom(boolean leaveDuringReview,boolean failDuringReview) throws Exception {
+    long verifyAnnualRoom(boolean leaveDuringReview,boolean failDuringReview) throws Exception {
         service=new PlaygroundService(store,context.getBean(AgentMapper.class),
                 context.getBean(UserMapper.class),json,true,true,false,true,clock);
         enable(1); enable(2);
@@ -460,7 +460,7 @@ class PlaygroundPersistenceTest {
             JsonNode published=shares.ownerResultLink(1,id).path("result");
             assertEquals("UNAVAILABLE",published.path("partnerReviews").get(0).path("status").asText());
             assertEquals("UNAVAILABLE",published.path("partnerReviews").get(1).path("status").asText());
-            return;
+            return id;
         }
         if (failDuringReview) {
             ObjectNode firstReview=ready(1);
@@ -523,6 +523,7 @@ class PlaygroundPersistenceTest {
                 .path("effectivePlan").path("productionBand").asText());
         assertFalse(publicResult.toString().contains("private:cats"));
         assertFalse(publicResult.toString().contains("private:dogs"));
+        return id;
     }
     ObjectNode annualPosition(JsonNode window,ObjectNode plan) {
         ObjectNode action=json.createObjectNode().put("actionType","POSITION_MONTHLY")
@@ -1248,6 +1249,7 @@ class PlaygroundPersistenceTest {
         @Bean com.ai.repo.jwt.JwtAuthenticationFilter adminJwtFilter(com.ai.repo.jwt.JwtProvider jwt,
                 com.ai.repo.service.AgentService agents) {
             var filter=new com.ai.repo.jwt.JwtAuthenticationFilter();
+            org.springframework.test.util.ReflectionTestUtils.setField(filter,"userMapper",context.getBean(UserMapper.class));
             org.springframework.test.util.ReflectionTestUtils.setField(filter,"jwtProvider",jwt);
             org.springframework.test.util.ReflectionTestUtils.setField(filter,"agentService",agents);
             return filter;
@@ -1449,6 +1451,7 @@ class PlaygroundPersistenceTest {
             definition.setFilter(proxy);
         } else {
             var filter=new com.ai.repo.jwt.JwtAuthenticationFilter();
+            org.springframework.test.util.ReflectionTestUtils.setField(filter,"userMapper",context.getBean(UserMapper.class));
             org.springframework.test.util.ReflectionTestUtils.setField(filter,"jwtProvider",jwt);
             org.springframework.test.util.ReflectionTestUtils.setField(filter,"agentService",databaseIdentities());
             definition.setFilterName("jwt");definition.setFilter(filter);
@@ -1472,6 +1475,13 @@ class PlaygroundPersistenceTest {
             input.set("keys",json.valueToTree(keys)); input.set("ownerTokens",json.valueToTree(tokens));
             if (browserFixture) input.set("ownerPasswords",json.valueToTree(browserPasswords));
             Files.writeString(config,json.writeValueAsString(input));Files.setPosixFilePermissions(config,java.nio.file.attribute.PosixFilePermissions.fromString("rw-------"));
+            if (browserFixture && annualModel) {
+                long annualId=verifyAnnualRoom(false,false);
+                input.put("realAccountShell",true).put("decisionSource","DETERMINISTIC_FIXTURE");
+                Files.writeString(config,json.writeValueAsString(input));
+                runBrowserObservation(directory,config,annualId,false);
+                return; // Deterministic decisions; no model call and no production login chain.
+            }
             if (browserFixture) {
                 long fixtureId=runBrowserEntry(directory,config);
                 JsonNode browserTokens=json.readTree(Files.readString(directory.resolve("browser-login-tokens.json")));
@@ -1727,13 +1737,16 @@ class PlaygroundPersistenceTest {
         Path frontend=Path.of(System.getenv("PLAYGROUND_FE_ROOT"));
         Path script=frontend.resolve("tests/playground/authenticated-observe.mjs");
         assertTrue(Files.isRegularFile(script),"Browser observation script missing");
-        String browserVersion="5".equals(System.getenv("PLAYGROUND_MODEL_TEST_CONTRACT_VERSION")) ? "v5" : "v4";
+        boolean annual="5".equals(System.getenv("PLAYGROUND_MODEL_TEST_CONTRACT_VERSION"))
+                && "true".equals(System.getenv("PLAYGROUND_MODEL_TEST_ANNUAL"));
+        String browserVersion=annual ? "v6" : "5".equals(System.getenv("PLAYGROUND_MODEL_TEST_CONTRACT_VERSION")) ? "v5" : "v4";
         var browserBuilder=new ProcessBuilder("node",script.toString(),config.toString(),Long.toString(id));
         browserBuilder.directory(frontend.toFile());
         browserBuilder.environment().put("VITE_PLAYGROUND_ENABLED","true");
         browserBuilder.environment().put("VITE_PLAYGROUND_NPC_V4","true");
         if ("5".equals(System.getenv("PLAYGROUND_MODEL_TEST_CONTRACT_VERSION")))
             browserBuilder.environment().put("VITE_PLAYGROUND_V5","true");
+        browserBuilder.environment().put("VITE_PLAYGROUND_V6",Boolean.toString(annual));
         browserBuilder.environment().put("VITE_TEST_MODE","false");
         browserBuilder.environment().put("PLAYGROUND_MODEL_TEST_CLOSING_SCENARIO",Boolean.toString(closing));
         browserBuilder.redirectErrorStream(true);
@@ -1749,6 +1762,15 @@ class PlaygroundPersistenceTest {
         assertEquals(0,browserProcess.exitValue(),"Authenticated browser observation failed; inspect private browser.log");
         JsonNode browserEvidence=json.readTree(Files.readString(directory.resolve("browser-evidence.json")));
         assertEquals(2,browserEvidence.path("owners").size());
+        if (annual) {
+            for (JsonNode owner:browserEvidence.path("owners")) {
+                assertEquals(11,owner.path("monthlyTurns").asInt());
+                assertEquals(11,owner.path("resolvedMonthlyTurns").asInt());
+                assertEquals(2,owner.path("recordedPartnerReviews").asInt());
+                assertTrue(owner.path("publicEnding").path("anonymous").asBoolean());
+                assertEquals(12,owner.path("publicEnding").path("months").asInt());
+            }
+        }
         if (closing) {
             var events=service.ownerEvents(1,id,0);
             String rejection=events.stream().filter(e->e.path("kind").asText().equals("DECISION"))
@@ -1768,8 +1790,12 @@ class PlaygroundPersistenceTest {
         }
         Files.writeString(Path.of("target/playground-"+browserVersion+"-browser-evidence.json"),
                 json.writerWithDefaultPrettyPrinter().writeValueAsString(browserEvidence));
-        for (int actor=1;actor<=2;actor++) Files.copy(directory.resolve("browser-owner-"+actor+".png"),
-                Path.of("target/playground-"+browserVersion+"-browser-owner-"+actor+".png"),java.nio.file.StandardCopyOption.REPLACE_EXISTING);
+        for (int actor=1;actor<=2;actor++) {
+            Files.copy(directory.resolve("browser-owner-"+actor+".png"),
+                    Path.of("target/playground-"+browserVersion+"-browser-owner-"+actor+".png"),java.nio.file.StandardCopyOption.REPLACE_EXISTING);
+            if (annual) Files.copy(directory.resolve("browser-share-"+actor+".png"),
+                    Path.of("target/playground-v6-browser-share-"+actor+".png"),java.nio.file.StandardCopyOption.REPLACE_EXISTING);
+        }
     }
     long runBrowserDirected(Path directory,Path config) throws Exception {
         Path frontend=Path.of(System.getenv("PLAYGROUND_FE_ROOT"));
