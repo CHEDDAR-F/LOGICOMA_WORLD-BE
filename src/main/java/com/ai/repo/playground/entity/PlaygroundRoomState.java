@@ -39,6 +39,8 @@ public class PlaygroundRoomState {
     private V5ShopRules.Signal v5Signal;
     private V6ConflictRules.StoryState v6Story;
     private V6ConflictRules.Kind v6Conflict;
+    private com.ai.repo.playground.rules.V7StoryRules.Cause incidentCause;
+    private com.ai.repo.playground.rules.V7StoryRules.Execution lastExecution;
     private V6MonthlyWindow v6Window;
     private V6AnnualWindow v6AnnualWindow;
     private Long reviewPendingAgent;

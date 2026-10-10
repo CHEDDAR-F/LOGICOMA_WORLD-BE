@@ -340,9 +340,17 @@ class PlaygroundPersistenceTest {
     @Test void v6RepeatedReviewModelFailureKeepsSettlementAndLetsPartnerFinish() throws Exception {
         verifyAnnualRoom(false,true);
     }
+    @Test void v7AnnualRoomPersistsVersionedContextAndCausalIncident() throws Exception {
+        verifyAnnualRoom(false,false,true);
+    }
     long verifyAnnualRoom(boolean leaveDuringReview,boolean failDuringReview) throws Exception {
+        return verifyAnnualRoom(leaveDuringReview,failDuringReview,false);
+    }
+    long verifyAnnualRoom(boolean leaveDuringReview,boolean failDuringReview,boolean storyVersion) throws Exception {
         service=new PlaygroundService(store,context.getBean(AgentMapper.class),
                 context.getBean(UserMapper.class),json,true,true,false,true,clock);
+        org.springframework.test.util.ReflectionTestUtils.setField(service,"enrichedContext",true);
+        org.springframework.test.util.ReflectionTestUtils.setField(service,"storyEnabled",storyVersion);
         enable(1); enable(2);
         businessError("ANNUAL_PARTICIPATION_GRANT_REQUIRED",()->service.invite(1,
                 new Invitation(1L,2L,"FULL",v5Brief("cats"))));
@@ -352,7 +360,7 @@ class PlaygroundPersistenceTest {
                 .get("activityId").toString());
         service.acceptInvitation(2,id,new InvitationAccept(v5Brief("dogs")));
         service.join(1,id); service.join(2,id);
-        assertEquals("1.0",service.ownerActivity(1,id).path("ruleVersion").asText());
+        assertEquals(storyVersion?"1.1":"1.0",service.ownerActivity(1,id).path("ruleVersion").asText());
         ObjectNode first=ready(1), opening=proposal(6,20);
         ObjectNode openingPlan=(ObjectNode)opening.path("payload").path("proposal").path("plan");
         openingPlan.set("venture",venture()); openingPlan.set("strategy",v5Strategy());
@@ -377,6 +385,12 @@ class PlaygroundPersistenceTest {
                 .put("publicRationale","I accept the revised funding, profit split, and roles.");
         accept.set("payload",json.createObjectNode().put("proposalId","plan-2"));
         service.submit(1,third.path("taskId").asLong(),submission(third,accept,UUID.randomUUID().toString()));
+        if (storyVersion) {
+            // A restart with the new-room switch off must preserve the saved rules and task context.
+            service=new PlaygroundService(store,context.getBean(AgentMapper.class),
+                    context.getBean(UserMapper.class),json,true,true,false,false,clock);
+            assertEquals("1.1",service.ownerActivity(1,id).path("ruleVersion").asText());
+        }
         int meetings=0;
         while (service.ownerActivity(1,id).path("status").asText().equals("PLANNING")
                 && !service.ownerActivity(1,id).path("phase").asText().equals("PARTNER_REVIEW")) {
@@ -387,13 +401,33 @@ class PlaygroundPersistenceTest {
             ObjectNode leaderTask=ready(leader);
             JsonNode window=leaderTask.path("visibleState").path("monthlyWindow");
             assertEquals(meetings+2,window.path("month").asInt());
+            assertTrue(window.path("responsibilities").isArray());
+            assertTrue(window.path("responsibilities").size()>=1);
+            assertEquals(json.valueToTree(leader==1?List.of("SUPPLY"):List.of("FULFILLMENT","CUSTOMERS")),
+                    window.path("responsibilities"));
+            assertTrue(window.path("optionEffects").isArray());
+            assertEquals(window.path("conflictCode").isNull()?0:3,window.path("optionEffects").size());
+            for (JsonNode effect:window.path("optionEffects")) {
+                assertEquals(8,effect.size());
+                assertTrue(effect.path("expenseCoins").isInt());
+                assertTrue(effect.path("rentDeltaCoins").isInt());
+            }
             JsonNode trend=window.path("recentTrend");
             assertEquals(Math.min(3,meetings+1),trend.size());
             assertEquals(meetings+1,trend.get(trend.size()-1).path("month").asInt());
             assertEquals(window.path("priorReport").path("closingCashMinor").asLong(),
                     trend.get(trend.size()-1).path("closingCashMinor").asLong());
             ObjectNode plan=json.createObjectNode().put("productionBand","STANDARD")
-                    .put("marketingAction","NONE").put("serviceFocus","FULFILLMENT");
+                    .put("marketingAction",storyVersion && meetings==0?"COMMUNITY_EVENT":"NONE")
+                    .put("serviceFocus","FULFILLMENT");
+            if (storyVersion) {
+                assertTrue(window.has("cause"));
+                if (!window.path("cause").isNull()) {
+                    assertEquals("COMMUNITY_EVENT",window.path("cause").path("sourceValue").asText());
+                    assertEquals(window.path("month").asInt()-1,window.path("cause").path("sourceMonth").asInt());
+                    assertEquals("RUSH_BULK_ORDER",window.path("conflictCode").asText());
+                }
+            }
             if (window.path("conflictCode").isNull()) plan.putNull("incidentResponse");
             else plan.put("incidentResponse",window.path("optionCodes").get(0).asText());
             service.submit(leader,leaderTask.path("taskId").asLong(),submission(leaderTask,
@@ -1476,7 +1510,7 @@ class PlaygroundPersistenceTest {
             if (browserFixture) input.set("ownerPasswords",json.valueToTree(browserPasswords));
             Files.writeString(config,json.writeValueAsString(input));Files.setPosixFilePermissions(config,java.nio.file.attribute.PosixFilePermissions.fromString("rw-------"));
             if (browserFixture && annualModel) {
-                long annualId=verifyAnnualRoom(false,false);
+                long annualId=verifyAnnualRoom(false,false,"true".equals(System.getenv("PLAYGROUND_STORY_TEST")));
                 input.put("realAccountShell",true).put("decisionSource","DETERMINISTIC_FIXTURE");
                 Files.writeString(config,json.writeValueAsString(input));
                 runBrowserObservation(directory,config,annualId,false);

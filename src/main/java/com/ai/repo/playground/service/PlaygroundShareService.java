@@ -337,7 +337,7 @@ public class PlaygroundShareService {
                 409,"ENDING_NOT_SHAREABLE");
         JsonNode plan=proposal.path("plan");
         List<String> privateText=privateTerms(activity);
-        boolean annual=view.path("ruleVersion").asText().equals("1.0");
+        boolean annual=Set.of("1.0","1.1").contains(view.path("ruleVersion").asText());
         boolean v6=annual || view.path("ruleVersion").asText().equals("0.9");
         ObjectNode result=json.createObjectNode().put("shareSchemaVersion",annual?5:v6?4:3).put("gameKey","ODD_SHOP")
                 .put("outcome",status.equals("SETTLED")?"OPERATED":"UNOPENED")
