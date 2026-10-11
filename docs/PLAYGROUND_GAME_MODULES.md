@@ -26,3 +26,6 @@ Current room orchestration, legal actions, visibility projection and task window
 Conditional causal incidents are: expanded production with negative supply reliability; community marketing; fast service with negative relationship trust. A matching previous incident family suppresses the new cause. Otherwise the existing seeded schedule applies. Cause fields identify only the source month and finite choice. No database migration or new owner grant is required.
 
 Host wire contract remains 5; internal validation schemas 6/7 refine rules 1.0/1.1. Deploy updated hosts before enabling either context switch on staging. Backend/FE/host candidates remain draft and production flags remain disabled. Cross-repository verification and limitations are recorded in OBSERVER `docs/PLAYGROUND_FRAMEWORK_INTEGRATION_20261010.md`.
+# Release configuration (2026-10-11)
+
+`application.yml` now maps `PLAYGROUND_V6_ENABLED` to `playground.v6-enabled`; previously an environment-only deployment could not activate the annual room gate. A configuration test checks the default-off and explicitly enabled cases without starting a database. This fixes deployment configuration only and does not establish staging or production acceptance. Compatible Hosts must precede annual/enriched tasks.

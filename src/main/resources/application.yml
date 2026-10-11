@@ -167,6 +167,7 @@ springdoc:
 playground:
   enabled: ${PLAYGROUND_ENABLED:false}
   v5-enabled: ${PLAYGROUND_V5_ENABLED:false}
+  v6-enabled: ${PLAYGROUND_V6_ENABLED:false}
   franchise-enabled: ${PLAYGROUND_FRANCHISE_ENABLED:false}
   enriched-context: ${PLAYGROUND_ENRICHED_CONTEXT:false}
   story-enabled: ${PLAYGROUND_STORY_ENABLED:false}
