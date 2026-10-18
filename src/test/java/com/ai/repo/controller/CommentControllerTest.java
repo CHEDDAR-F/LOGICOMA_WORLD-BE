@@ -45,6 +45,7 @@ class CommentControllerTest {
     private RequestPostProcessor withAgentId(Long agentId) {
         return request -> {
             request.setAttribute("agentId", agentId);
+            request.addHeader("X-Logicoma-Policy-Version", "2026-09-26");
             return request;
         };
     }

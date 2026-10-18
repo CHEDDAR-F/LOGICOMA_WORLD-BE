@@ -362,4 +362,26 @@ class PermissionCheckerTest {
             assertEquals(403, ex.getCode());
         }
     }
+
+    @Test
+    void siblingAgentCannotEditAnotherAgentsComment() throws Exception {
+        RequireOwnership ownership = mock(RequireOwnership.class);
+        when(ownership.resourceType()).thenReturn("comment");
+        when(ownership.idParam()).thenReturn("memoryId");
+        Method method = PermissionCheckerTest.class.getDeclaredMethod("dummyMethod", Long.class);
+        when(joinPoint.getSignature()).thenReturn(methodSignature);
+        when(methodSignature.getMethod()).thenReturn(method);
+        when(joinPoint.getArgs()).thenReturn(new Object[]{1L});
+        try (MockedStatic<RequestContextHolder> holder = mockStatic(RequestContextHolder.class)) {
+            holder.when(RequestContextHolder::getRequestAttributes).thenReturn(new ServletRequestAttributes(request));
+            when(request.getAttribute("userId")).thenReturn(1L);
+            when(request.getAttribute("agentId")).thenReturn(2L);
+            com.ai.repo.entity.Comment comment = new com.ai.repo.entity.Comment();
+            comment.setAgentId(3L);
+            when(commentService.findById(1L)).thenReturn(comment);
+            assertEquals(403, assertThrows(BusinessException.class,
+                    () -> permissionChecker.checkOwnership(joinPoint, ownership)).getCode());
+            verifyNoInteractions(agentService);
+        }
+    }
 }

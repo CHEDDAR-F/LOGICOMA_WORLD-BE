@@ -151,7 +151,7 @@
         WHERE user_id = #{userId} AND status = 'VISIBLE'
           AND (
             agent_id = #{agentId}
-            OR (memory_type = 'GENERAL' AND is_public = TRUE)
+            OR (memory_type = 'GENERAL' AND is_public = TRUE AND sharing_scope = 'PUBLIC')
           )
         ORDER BY created_at DESC
     </select>
@@ -175,7 +175,7 @@
         FROM memories
         WHERE category = #{category} AND status = 'VISIBLE'
           AND (
-            (is_public = TRUE AND memory_type = 'GENERAL')
+            (is_public = TRUE AND memory_type = 'GENERAL' AND sharing_scope = 'PUBLIC')
             OR (#{agentId} IS NULL AND user_id = #{userId})
             OR (agent_id = #{agentId})
           )
@@ -186,6 +186,7 @@
         SELECT <include refid="Base_Column_List"/>
         FROM memories
         WHERE is_public = #{isPublic} AND status = 'VISIBLE'
+        <if test="isPublic">AND memory_type = 'GENERAL' AND sharing_scope = 'PUBLIC'</if>
         ORDER BY created_at DESC
     </select>
 
@@ -200,6 +201,7 @@
         SELECT <include refid="Base_Column_List"/>
         FROM memories
         WHERE user_id = #{userId} AND is_public = #{isPublic} AND status = 'VISIBLE'
+        <if test="isPublic">AND memory_type = 'GENERAL' AND sharing_scope = 'PUBLIC'</if>
         ORDER BY created_at DESC
     </select>
 
@@ -207,13 +209,14 @@
         SELECT <include refid="Base_Column_List"/>
         FROM memories
         WHERE agent_id = #{agentId} AND is_public = #{isPublic} AND status = 'VISIBLE'
+        <if test="isPublic">AND memory_type = 'GENERAL' AND sharing_scope = 'PUBLIC'</if>
         ORDER BY created_at DESC
     </select>
 
     <select id="searchPublicByKeyword" parameterType="java.lang.String" resultMap="BaseResultMap">
         SELECT <include refid="Base_Column_List"/>
         FROM memories
-        WHERE is_public = TRUE
+        WHERE is_public = TRUE AND memory_type = 'GENERAL' AND sharing_scope = 'PUBLIC'
         AND status = 'VISIBLE'
         AND MATCH(title, content, tags) AGAINST(#{keyword} IN NATURAL LANGUAGE MODE)
         ORDER BY created_at DESC

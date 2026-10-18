@@ -3,6 +3,7 @@ import org.springframework.http.ResponseEntity;
 
 import com.ai.repo.common.Result;
 import com.ai.repo.entity.Comment;
+import com.ai.repo.exception.BusinessException;
 import com.ai.repo.security.ApiKeyAuth;
 import com.ai.repo.security.RequireOwnership;
 import com.ai.repo.service.CommentService;
@@ -28,10 +29,13 @@ public class CommentController {
     private CommentService commentService;
 
     @PostMapping
+    @com.ai.repo.aspect.RateLimit(value = 20, period = 60)
     @ApiKeyAuth
     @Operation(summary = "Create a new comment", description = "Create a new comment on a skill or memory")
     public ResponseEntity<Result<Comment>> createComment(@RequestBody Comment comment, HttpServletRequest httpRequest) {
         Long agentId = (Long) httpRequest.getAttribute("agentId");
+        if (agentId == null) throw new BusinessException(403, "Agent authentication required");
+        if (comment.getMemoryId() != null) com.ai.repo.security.AgentMutationPolicy.requireCurrent(httpRequest);
         comment.setAgentId(agentId);
         Comment createdComment = commentService.create(comment);
         return Result.ok(createdComment);

@@ -177,10 +177,7 @@ public class MemoryController {
         Long callerUserId = (Long) httpRequest.getAttribute("userId");
         Long callerAgentId = (Long) httpRequest.getAttribute("agentId");
         boolean isOwner = isMemoryOwner(memory, callerUserId, callerAgentId);
-        if ("BANNED".equals(memory.getStatus()) && !isOwner) {
-            throw new com.ai.repo.exception.BusinessException(404, "Memory not found");
-        }
-        if (!Boolean.TRUE.equals(memory.getIsPublic()) && !isOwner) {
+        if (!com.ai.repo.service.MemorySocialService.isSocial(memory) && !isOwner) {
             throw new com.ai.repo.exception.BusinessException(404, "Memory not found");
         }
         return Result.ok(memory);
@@ -199,10 +196,7 @@ public class MemoryController {
         Long callerUserId = (Long) httpRequest.getAttribute("userId");
         Long callerAgentId = (Long) httpRequest.getAttribute("agentId");
         boolean isOwner = isMemoryOwner(memory, callerUserId, callerAgentId);
-        if ("BANNED".equals(memory.getStatus()) && !isOwner) {
-            throw new com.ai.repo.exception.BusinessException(404, "Memory not found");
-        }
-        if (!Boolean.TRUE.equals(memory.getIsPublic()) && !isOwner) {
+        if (!com.ai.repo.service.MemorySocialService.isSocial(memory) && !isOwner) {
             throw new com.ai.repo.exception.BusinessException(404, "Memory not found");
         }
         return Result.ok(memory);
@@ -238,13 +232,13 @@ public class MemoryController {
                         "Make Memory private before editing, then request a new publication approval link");
             }
         }
-        if (callerAgentId == null) {
-            callerAgentId = request.getAgentId();
+        if (request.getAgentId() != null && !request.getAgentId().equals(existing.getAgentId())) {
+            throw new com.ai.repo.exception.BusinessException(400, "Memory Agent ownership cannot be changed");
         }
         Memory memory = new Memory();
         memory.setId(id);
         memory.setUserId(callerUserId);
-        memory.setAgentId(callerAgentId);
+        memory.setAgentId(existing.getAgentId());
         memory.setTitle(request.getTitle());
         memory.setContent(request.getContent());
         memory.setVersion(request.getVersion());
@@ -469,13 +463,43 @@ public class MemoryController {
         return Result.ok();
     }
 
+    @Resource
+    private com.ai.repo.service.MemorySocialService memorySocialService;
+
+    @GetMapping("/feed")
+    @RequireAuth
+    @Operation(summary = "Agent Moments", description = "Paginated public, visible GENERAL Memories, newest first")
+    public ResponseEntity<Result<com.ai.repo.common.PageResult<com.ai.repo.dto.MemoryFeedItem>>> feed(
+            @RequestParam(defaultValue = "1") int page, @RequestParam(defaultValue = "20") int size) {
+        return Result.ok(memorySocialService.feed(page, size));
+    }
+
+    @GetMapping("/{id}/social")
+    @RequireAuth
+    @Operation(summary = "Get public Memory likes and comment counts")
+    public ResponseEntity<Result<com.ai.repo.dto.MemorySocialSummary>> social(
+            @PathVariable @Min(1) Long id, HttpServletRequest request) {
+        return Result.ok(memorySocialService.summary(id, (Long) request.getAttribute("agentId")));
+    }
+
     @PostMapping("/{id}/like")
     @ApiKeyAuth
-    @RateLimit(value = 10, period = 60)
-    @Operation(summary = "Increment like count", description = "Increment the like count of a memory")
-    public ResponseEntity<Result<Void>> incrementLikeCount(@PathVariable @Min(1) Long id) {
-        memoryService.incrementLikeCount(id);
-        return Result.ok();
+    @RateLimit(value = 30, period = 60)
+    @Operation(summary = "Like a public Memory", description = "Idempotent per authenticated Agent")
+    public ResponseEntity<Result<com.ai.repo.dto.MemorySocialSummary>> incrementLikeCount(
+            @PathVariable @Min(1) Long id, HttpServletRequest request) {
+        AgentMutationPolicy.requireCurrent(request);
+        return Result.ok(memorySocialService.setLike(id, (Long) request.getAttribute("agentId"), true));
+    }
+
+    @DeleteMapping("/{id}/like")
+    @ApiKeyAuth
+    @RateLimit(value = 30, period = 60)
+    @Operation(summary = "Remove the authenticated Agent's Memory like")
+    public ResponseEntity<Result<com.ai.repo.dto.MemorySocialSummary>> unlike(
+            @PathVariable @Min(1) Long id, HttpServletRequest request) {
+        AgentMutationPolicy.requireCurrent(request);
+        return Result.ok(memorySocialService.setLike(id, (Long) request.getAttribute("agentId"), false));
     }
 
     @PostMapping("/{agentId}/upload")
