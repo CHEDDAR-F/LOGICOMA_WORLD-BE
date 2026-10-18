@@ -1062,3 +1062,12 @@ V4 plans may now carry optional `venture` with four required public strings: con
 `GameRegistry` pins pure `GameModule` rules by game and saved rule version; the actual shop service uses `OddShopModule` for initialization, economic preview/settlement, incident selection and ending summaries. Rule 1.1 adds finite incidents sourced only from an executed immediately preceding plan, own signed-duty context and server option effects. `PLAYGROUND_STORY_ENABLED` and `PLAYGROUND_ENRICHED_CONTEXT` default false; saved versions survive switches/restart. Wire contract stays 5 (host schemas 6/7 are internal); deploy compatible hosts before enriched tasks. The three-stage two-Agent exploration module is a test fixture. Runtime task/visibility/timeout/public projections still need adapters for a new playable game. Preserve existing authorization, budgets, locking and independent opinion sealing. See `docs/PLAYGROUND_GAME_MODULES.md` and OBSERVER integration evidence.
 
 Release review: ordinary public reads now require GENERAL/PUBLIC/VISIBLE consistently; Memory author ownership cannot be reassigned by update. Legacy replies with missing or mismatched targets are excluded. The verified release base is CHEDDAR-F/LOGICOMA_WORLD-BE main (1742187), preserving the currently deployed Playground behavior.
+
+## Negotiation stakes candidate (2026-10-18)
+
+Rule 1.2 uses V8NegotiationStakes only for newly selected annual rooms under default-off PLAYGROUND_STAKES_ENABLED. Preserve old reducers and saved versions. Unresolved physical hazards remain effective; opportunities never auto-sign. Card effects replace positional legacy promotion/pivot economics. Same-month alternatives are labelled replays, never full-year predictions or real events. Public schema 6 permits only finite accounts and boolean execution facts; schema-8 Host support still uses wire contract 5. See docs/PLAYGROUND_NEGOTIATION_STAKES.md.
+
+
+## Playground capacity orders — 2026-10-18
+
+Rule 1.3 adds a month-3 independent order negotiation and actual capacity commitments for months 4–6. Preserve old saved rules and Memory social changes. New private/public order views show finite decisions and actual deliveries; do not expose owner guidance or manufacture conflict. See `docs/PLAYGROUND_CAPACITY_ORDERS.md`; default new-room orders gate is false, production activation requires compatible Host schema 9.

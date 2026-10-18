@@ -47,5 +47,7 @@ public class PlaygroundRoomState {
     private Map<Long, JsonNode> partnerReviews = new LinkedHashMap<>();
     private V5FranchiseOffer franchiseOffer;
     private V5FranchiseWindow franchiseWindow;
+    private com.ai.repo.playground.rules.V9OrderWindow orderWindow;
+    private com.ai.repo.playground.rules.V9CapacityOrder.Contract capacityOrder;
     private MonthlyShopRules.State game;
 }

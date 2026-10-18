@@ -61,6 +61,17 @@ public final class V5ShopRules {
     public MonthResult advance(MonthlyShopRules.State game, Strategy strategy,
                                Signal signal, Response response,V5FranchiseOffer franchise,
                                boolean variableDemand,MonthlyShopRules.TradingAdjustment external) {
+        return trade(game,strategy,signal,response,franchise,variableDemand,external,null,false).month();
+    }
+    public record CapacityMonth(MonthResult month,MonthlyShopRules.CapacityDelivery delivery) {}
+    public CapacityMonth advanceWithCapacity(MonthlyShopRules.State game,Strategy strategy,Signal signal,
+            Response response,V5FranchiseOffer franchise,boolean variableDemand,
+            MonthlyShopRules.TradingAdjustment external,MonthlyShopRules.CapacityReservation reservation) {
+        return trade(game,strategy,signal,response,franchise,variableDemand,external,reservation,true);
+    }
+    private CapacityMonth trade(MonthlyShopRules.State game,Strategy strategy,Signal signal,
+            Response response,V5FranchiseOffer franchise,boolean variableDemand,
+            MonthlyShopRules.TradingAdjustment external,MonthlyShopRules.CapacityReservation reservation,boolean boundedCapacity) {
         require(game != null && strategy != null && signal != null && response != null,
                 "INVALID_V5_MONTH");
         require(external != null,"INVALID_V5_MONTH");
@@ -148,10 +159,11 @@ public final class V5ShopRules {
                         ? (signal==Signal.MARKET_SHIFT
                             ? List.of(10,10,12,12,14,26) : List.of(10,12,14,15,28,34))
                         : List.of());
-        MonthlyShopRules.State next = ledger.advanceMonth(game, plan, null, adjustment);
+        MonthlyShopRules.CapacityTrade capacity=!boundedCapacity?null:ledger.advanceCapacityMonth(game,plan,adjustment,reservation);
+        MonthlyShopRules.State next = capacity==null?ledger.advanceMonth(game, plan, null, adjustment):capacity.game();
         boolean failedToOpen = next.failedOpeningMonth() != null;
-        return new MonthResult(next, response, failedToOpen ? 0 : standingCost + decisionCost,
-                failedToOpen ? 0 : extraBuyers.size(), guard);
+        return new CapacityMonth(new MonthResult(next, response, failedToOpen ? 0 : standingCost + decisionCost,
+                failedToOpen ? 0 : extraBuyers.size(), guard),capacity==null?null:capacity.delivery());
     }
 
     private static int footfallPulse(int seed,int month) {

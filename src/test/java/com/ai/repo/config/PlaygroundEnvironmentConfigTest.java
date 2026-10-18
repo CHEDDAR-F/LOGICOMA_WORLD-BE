@@ -23,6 +23,18 @@ class PlaygroundEnvironmentConfigTest {
     }
 
     @Test
+    void stakesGateDefaultsOffAndRequiresExplicitDeploymentSwitch() throws IOException {
+        assertEquals(false,environment(Map.of()).getProperty("playground.stakes-enabled",Boolean.class));
+        assertEquals(true,environment(Map.of("PLAYGROUND_STAKES_ENABLED","true"))
+                .getProperty("playground.stakes-enabled",Boolean.class));
+    }
+
+    @Test
+    void ordersRequireExplicitDeploymentSwitch() throws IOException {
+        assertEquals(false,environment(Map.of()).getProperty("playground.orders-enabled",Boolean.class));
+        assertEquals(true,environment(Map.of("PLAYGROUND_ORDERS_ENABLED","true")).getProperty("playground.orders-enabled",Boolean.class));
+    }
+    @Test
     void annualGateDefaultsOff() throws IOException {
         assertEquals(false, environment(Map.of()).getProperty("playground.v6-enabled", Boolean.class));
     }

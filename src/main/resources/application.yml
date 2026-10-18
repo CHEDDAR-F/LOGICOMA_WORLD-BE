@@ -170,5 +170,7 @@ playground:
   v6-enabled: ${PLAYGROUND_V6_ENABLED:false}
   franchise-enabled: ${PLAYGROUND_FRANCHISE_ENABLED:false}
   enriched-context: ${PLAYGROUND_ENRICHED_CONTEXT:false}
+  orders-enabled: ${PLAYGROUND_ORDERS_ENABLED:false}
+  stakes-enabled: ${PLAYGROUND_STAKES_ENABLED:false}
   story-enabled: ${PLAYGROUND_STORY_ENABLED:false}
   expiry-scan-ms: 60000

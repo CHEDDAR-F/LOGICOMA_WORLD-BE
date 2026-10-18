@@ -17,7 +17,7 @@ import org.springframework.context.annotation.*;
 import org.springframework.core.io.ClassPathResource;
 import org.springframework.jdbc.core.JdbcTemplate;
 import org.springframework.jdbc.datasource.DataSourceTransactionManager;
-import org.springframework.jdbc.datasource.DriverManagerDataSource;
+import com.zaxxer.hikari.HikariDataSource;
 import org.springframework.transaction.PlatformTransactionManager;
 import org.springframework.transaction.annotation.EnableTransactionManagement;
 
@@ -44,14 +44,20 @@ class PlaygroundPersistenceTest {
     static ObjectMapper json=new ObjectMapper().registerModule(new JavaTimeModule()).disable(SerializationFeature.WRITE_DATES_AS_TIMESTAMPS);
     static MutableClock clock=new MutableClock();
     PlaygroundService service;
+    String orderMode="SMALL";
+    List<JsonNode> capacityTasks=new ArrayList<>();
     PlaygroundMapper store;
     PlaygroundMatchingService matching;
     JdbcTemplate jdbc;
     @Configuration @EnableTransactionManagement
     static class Config {
-        @Bean DataSource dataSource() {
-            DriverManagerDataSource ds=new DriverManagerDataSource(settings.get("url").asText(),"root",settings.get("password").asText());
-            ds.setDriverClassName("com.mysql.cj.jdbc.Driver"); return ds;
+        @Bean(destroyMethod="close") DataSource dataSource() {
+            // Reuse a small set of real connections; repeated annual suites otherwise
+            // exhaust macOS ephemeral sockets with one connection per mapper call.
+            HikariDataSource ds=new HikariDataSource();
+            ds.setJdbcUrl(settings.get("url").asText()); ds.setUsername("root");
+            ds.setPassword(settings.get("password").asText()); ds.setMaximumPoolSize(8);
+            ds.setMinimumIdle(0); ds.setDriverClassName("com.mysql.cj.jdbc.Driver"); return ds;
         }
         @Bean PlatformTransactionManager transactionManager(DataSource ds) { return new DataSourceTransactionManager(ds); }
         @Bean SqlSessionFactory sqlSessionFactory(DataSource ds) throws Exception {
@@ -343,14 +349,68 @@ class PlaygroundPersistenceTest {
     @Test void v7AnnualRoomPersistsVersionedContextAndCausalIncident() throws Exception {
         verifyAnnualRoom(false,false,true);
     }
+    @Test void v9UnsignedOrderDeadlineFallsBackWithoutCreatingAnObligation() throws Exception {
+        orderMode="TIMEOUT";long id=verifyAnnualRoom(false,false,true,true,true);
+        assertTrue(service.ownerActivity(1,id).path("capacityOrder").isNull());
+    }
+    @Test void v9LargeOrderKeepsItsDistinctCapacityAcrossTheYear() throws Exception {
+        orderMode="LARGE";long id=verifyAnnualRoom(false,false,true,true,true);
+        JsonNode c=service.ownerActivity(1,id).path("capacityOrder");
+        assertEquals("LARGE",c.path("choice").asText());
+        assertEquals(3,c.path("deliveries").size());
+        for(JsonNode d:c.path("deliveries")) { assertEquals(4,d.path("reservedUnits").asInt());assertTrue(d.path("regularCapacity").asInt()<=2); }
+    }
     long verifyAnnualRoom(boolean leaveDuringReview,boolean failDuringReview) throws Exception {
         return verifyAnnualRoom(leaveDuringReview,failDuringReview,false);
     }
+    @Test void v8StakesSurviveRestartAndPublishOnlyFiniteImpactAccounts() throws Exception {
+        long id=verifyAnnualRoom(false,false,true,true);
+        PlaygroundShareService shares=context.getBean(PlaygroundShareService.class);
+        var row=store.share(id);
+        ObjectNode payload=(ObjectNode)json.readTree(row.getPayloadJson());
+        assertEquals(6,payload.path("shareSchemaVersion").asInt());
+        JsonNode month=payload.path("business").path("months").get(1);
+        assertEquals("SAME_MONTH_SAME_MARKET",month.path("decisionImpact").path("basis").asText());
+        assertEquals(month.path("profitMinor").asLong(),month.path("decisionImpact").path("actual").path("profitMinor").asLong());
+        String original=row.getPayloadJson();
+        ((ObjectNode)month.path("decisionImpact").path("firstPosition")).put("ownerPrivateCanary","must-never-be-public");
+        row.setPayloadJson(json.writeValueAsString(payload));store.saveShare(row);
+        businessError("SHARE_NOT_FOUND",()->shares.publicResult(row.getPublicToken()));
+        row.setPayloadJson(original);store.saveShare(row);
+        assertEquals(6,shares.publicResult(row.getPublicToken()).path("shareSchemaVersion").asInt());
+        Files.writeString(Path.of("target/playground-v8-stakes.public.json"),json.writerWithDefaultPrettyPrinter().writeValueAsString(
+                json.createObjectNode().put("source","LOCAL_MYSQL_DETERMINISTIC_DECISIONS_NOT_MODEL_EVIDENCE")
+                    .set("result",shares.publicResult(row.getPublicToken()))));
+    }
     long verifyAnnualRoom(boolean leaveDuringReview,boolean failDuringReview,boolean storyVersion) throws Exception {
+        return verifyAnnualRoom(leaveDuringReview,failDuringReview,storyVersion,false);
+    }
+    @Test void v9OrderSurvivesRestartAndPublishesThreeActualDeliveries() throws Exception {
+        long id=verifyAnnualRoom(false,false,true,true,true);
+        JsonNode order=service.ownerActivity(1,id).path("capacityOrder");
+        assertEquals("SMALL",order.path("choice").asText());
+        assertEquals(3,order.path("deliveries").size());
+        var link=context.getBean(PlaygroundShareService.class).ownerResultLink(1,id);
+        assertEquals(json.readTree(order.toString()),link.path("result").path("business").path("capacityOrder"));
+        var shareRow=store.share(id);String originalPayload=shareRow.getPayloadJson();
+        ObjectNode unsafe=(ObjectNode)json.readTree(originalPayload);
+        ((ObjectNode)unsafe.path("business").path("capacityOrder").path("deliveries").get(0)).put("privateNote","canary");
+        shareRow.setPayloadJson(json.writeValueAsString(unsafe));store.saveShare(shareRow);
+        businessError("SHARE_NOT_FOUND",()->context.getBean(PlaygroundShareService.class).publicResult(shareRow.getPublicToken()));
+        shareRow.setPayloadJson(originalPayload);store.saveShare(shareRow);
+        Files.writeString(Path.of("target/playground-v9-tasks.json"),json.writeValueAsString(capacityTasks));
+        Files.writeString(Path.of("target/playground-v9-orders.public.json"),json.writerWithDefaultPrettyPrinter().writeValueAsString(link.path("result")));
+    }
+    long verifyAnnualRoom(boolean leaveDuringReview,boolean failDuringReview,boolean storyVersion,boolean stakesVersion) throws Exception {
+        return verifyAnnualRoom(leaveDuringReview,failDuringReview,storyVersion,stakesVersion,false);
+    }
+    long verifyAnnualRoom(boolean leaveDuringReview,boolean failDuringReview,boolean storyVersion,boolean stakesVersion,boolean ordersVersion) throws Exception {
         service=new PlaygroundService(store,context.getBean(AgentMapper.class),
                 context.getBean(UserMapper.class),json,true,true,false,true,clock);
         org.springframework.test.util.ReflectionTestUtils.setField(service,"enrichedContext",true);
         org.springframework.test.util.ReflectionTestUtils.setField(service,"storyEnabled",storyVersion);
+        org.springframework.test.util.ReflectionTestUtils.setField(service,"stakesEnabled",stakesVersion);
+        org.springframework.test.util.ReflectionTestUtils.setField(service,"ordersEnabled",ordersVersion);
         enable(1); enable(2);
         businessError("ANNUAL_PARTICIPATION_GRANT_REQUIRED",()->service.invite(1,
                 new Invitation(1L,2L,"FULL",v5Brief("cats"))));
@@ -360,7 +420,7 @@ class PlaygroundPersistenceTest {
                 .get("activityId").toString());
         service.acceptInvitation(2,id,new InvitationAccept(v5Brief("dogs")));
         service.join(1,id); service.join(2,id);
-        assertEquals(storyVersion?"1.1":"1.0",service.ownerActivity(1,id).path("ruleVersion").asText());
+        assertEquals(ordersVersion?"1.3":stakesVersion?"1.2":storyVersion?"1.1":"1.0",service.ownerActivity(1,id).path("ruleVersion").asText());
         ObjectNode first=ready(1), opening=proposal(6,20);
         ObjectNode openingPlan=(ObjectNode)opening.path("payload").path("proposal").path("plan");
         openingPlan.set("venture",venture()); openingPlan.set("strategy",v5Strategy());
@@ -389,12 +449,43 @@ class PlaygroundPersistenceTest {
             // A restart with the new-room switch off must preserve the saved rules and task context.
             service=new PlaygroundService(store,context.getBean(AgentMapper.class),
                     context.getBean(UserMapper.class),json,true,true,false,false,clock);
-            assertEquals("1.1",service.ownerActivity(1,id).path("ruleVersion").asText());
+            assertEquals(ordersVersion?"1.3":stakesVersion?"1.2":"1.1",service.ownerActivity(1,id).path("ruleVersion").asText());
         }
         int meetings=0;
         while (service.ownerActivity(1,id).path("status").asText().equals("PLANNING")
                 && !service.ownerActivity(1,id).path("phase").asText().equals("PARTNER_REVIEW")) {
-            JsonNode persisted=json.readTree(store.activity(id).getStateJson()).path("v6AnnualWindow");
+            JsonNode saved=json.readTree(store.activity(id).getStateJson());
+            if(ordersVersion && saved.path("orderWindow").isObject()
+                    && !saved.path("orderWindow").path("phase").asText().equals("CLOSED")) {
+                JsonNode ow=saved.path("orderWindow");
+                if(orderMode.equals("TIMEOUT")) {
+                    clock.advance(901);service.expire(id);continue;
+                }
+                long a=ow.path("firstAgentId").asLong(),b=ow.path("secondAgentId").asLong();
+                ObjectNode t=ready(a); var window=t.path("visibleState").path("orderWindow");
+                var initialAction=orderAction(window,"POSITION_CAPACITY_ORDER","LARGE");
+                var initialSubmission=submission(t,initialAction,UUID.randomUUID().toString());
+                var receipt=service.submit(a,t.path("taskId").asLong(),initialSubmission);
+                assertEquals(receipt,service.submit(a,t.path("taskId").asLong(),initialSubmission));
+                t=ready(b);window=t.path("visibleState").path("orderWindow");
+                assertTrue(window.path("firstPlan").isNull());
+                service.submit(b,t.path("taskId").asLong(),submission(t,orderAction(window,"POSITION_CAPACITY_ORDER",orderMode),UUID.randomUUID().toString()));
+                t=ready(a);window=t.path("visibleState").path("orderWindow");
+                if(orderMode.equals("LARGE")) {
+                    service.submit(a,t.path("taskId").asLong(),submission(t,orderAction(window,"ACCEPT_CAPACITY_ORDER",null),UUID.randomUUID().toString()));
+                    continue;
+                }
+                ObjectNode revised=orderAction(window,"REPLY_CAPACITY_ORDER",orderMode);
+                ((ObjectNode)revised.path("payload")).put("claimsRevision",!orderMode.equals("LARGE"));
+                service.submit(a,t.path("taskId").asLong(),submission(t,revised,UUID.randomUUID().toString()));
+                // Reconstruct service with new-room flags off: accepted obligation is persisted.
+                service=new PlaygroundService(store,context.getBean(AgentMapper.class),context.getBean(UserMapper.class),json,true,true,false,false,clock);
+                t=ready(b);window=t.path("visibleState").path("orderWindow");
+                service.submit(b,t.path("taskId").asLong(),submission(t,orderAction(window,"ACCEPT_CAPACITY_ORDER",null),UUID.randomUUID().toString()));
+                assertEquals("SMALL",service.ownerActivity(1,id).path("capacityOrder").path("choice").asText());
+                continue;
+            }
+            JsonNode persisted=saved.path("v6AnnualWindow");
             assertTrue(persisted.path("month").asInt()>=2 && persisted.path("month").asInt()<=12);
             long leader=persisted.path("firstAgentId").asLong();
             long partner=persisted.path("secondAgentId").asLong();
@@ -465,8 +556,10 @@ class PlaygroundPersistenceTest {
                 confirmation=ready(partner);
             } else assertEquals("AWAIT_CONFIRM",confirmation.path("visibleState").path("monthlyWindow")
                     .path("phase").asText());
-            ObjectNode confirmationAction=json.createObjectNode().put("actionType","ACCEPT_MONTHLY")
-                    .put("publicRationale","I read the same plan and confirm our operating choice.");
+            ObjectNode confirmationAction=json.createObjectNode().put("actionType",stakesVersion && meetings==0?"DECLINE_MONTHLY":"ACCEPT_MONTHLY")
+                    .put("publicRationale",stakesVersion && meetings==0
+                            ?"I decline this plan because I prefer conserving production cash."
+                            :"I read the same plan and confirm our operating choice.");
             confirmationAction.set("payload",json.createObjectNode()
                     .put("triggerEventId",window.path("triggerEventId").asText())
                     .put("targetVersion",confirmation.path("visibleState").path("monthlyWindow")
@@ -540,24 +633,36 @@ class PlaygroundPersistenceTest {
         JsonNode publicResult=link.path("result");
         String sharePath=link.path("sharePath").asText();
         String token=sharePath.substring(sharePath.indexOf("/shares/")+8,sharePath.indexOf("/landing"));
-        assertEquals(5,shares.publicResult(token).path("shareSchemaVersion").asInt());
+        assertEquals(ordersVersion?7:stakesVersion?6:5,shares.publicResult(token).path("shareSchemaVersion").asInt());
         assertEquals(2,shares.publicResult(token).path("partnerReviews").size());
-        assertEquals(5,publicResult.path("shareSchemaVersion").asInt());
+        assertEquals(ordersVersion?7:stakesVersion?6:5,publicResult.path("shareSchemaVersion").asInt());
         assertEquals(2,publicResult.path("partnerReviews").size());
         assertEquals(failDuringReview?"UNAVAILABLE":"RECORDED",
                 publicResult.path("partnerReviews").get(0).path("status").asText());
         assertEquals("RECORDED",publicResult.path("partnerReviews").get(1).path("status").asText());
         assertEquals(finalGame.path("operatedMonths").asInt(),
                 publicResult.path("business").path("months").size());
-        assertEquals("COUNTER_ACCEPTED",publicResult.path("business").path("months").get(1)
+        assertEquals(stakesVersion?"DECLINED":"COUNTER_ACCEPTED",publicResult.path("business").path("months").get(1)
                 .path("resolution").asText());
         assertEquals("CONSERVATIVE",publicResult.path("business").path("months").get(1)
                 .path("secondPlan").path("productionBand").asText());
-        assertEquals("STANDARD",publicResult.path("business").path("months").get(1)
+        if (stakesVersion) {
+            JsonNode firstMonth=publicResult.path("business").path("months").get(1);
+            assertEquals("SIGNED_FALLBACK",firstMonth.path("effectivePlan").asText());
+            assertTrue(firstMonth.path("incidentUnresolved").asBoolean());
+            assertEquals(firstMonth.path("decisionImpact").path("actual"),firstMonth.path("decisionImpact").path("signedFallback"));
+        } else assertEquals("STANDARD",publicResult.path("business").path("months").get(1)
                 .path("effectivePlan").path("productionBand").asText());
         assertFalse(publicResult.toString().contains("private:cats"));
         assertFalse(publicResult.toString().contains("private:dogs"));
         return id;
+    }
+    ObjectNode orderAction(JsonNode window,String type,String choice) {
+        ObjectNode action=json.createObjectNode().put("actionType",type).put("publicRationale","Reserve enough capacity for the coming three months.");
+        ObjectNode payload=action.putObject("payload").put("triggerEventId",window.path("triggerEventId").asText())
+                .put("targetVersion",window.path("currentOfferVersion").asText());
+        if(choice!=null) payload.put("choice",choice);
+        return action;
     }
     ObjectNode annualPosition(JsonNode window,ObjectNode plan) {
         ObjectNode action=json.createObjectNode().put("actionType","POSITION_MONTHLY")
@@ -1185,7 +1290,11 @@ class PlaygroundPersistenceTest {
         long id=Long.parseLong(service.tasks(actor).get(0).get("taskId").toString());
         long version=service.participation(actor,actor).getVersion();
         ObjectNode task=service.claim(actor,id,new Claim(version));
-        return service.startAttempt(actor,id,new AttemptStart(task.get("leaseToken").asText(),version,UUID.randomUUID().toString()));
+        ObjectNode result=service.startAttempt(actor,id,new AttemptStart(task.get("leaseToken").asText(),version,UUID.randomUUID().toString()));
+        if(result.path("ruleVersion").asText().equals("1.3")) {
+            ObjectNode sanitized=result.deepCopy();sanitized.put("leaseToken","local-test-redacted");capacityTasks.add(sanitized);
+        }
+        return result;
     }
     Submission submission(ObjectNode task,JsonNode action,String key) {
         return new Submission(task.get("taskId").asText(),task.get("activityId").asText(),task.get("leaseToken").asText(),
@@ -2042,9 +2151,11 @@ class PlaygroundPersistenceTest {
         room("SHORT"); ObjectNode task=ready(1); long taskId=task.get("taskId").asLong();
         Submission request=submission(task,proposal(4,16),UUID.randomUUID().toString());
         context.close(); context=new AnnotationConfigApplicationContext(Config.class);
+        jdbc=new JdbcTemplate(context.getBean(DataSource.class));
         matching=context.getBean(PlaygroundMatchingService.class); service=context.getBean(PlaygroundService.class); store=context.getBean(PlaygroundMapper.class);
         JsonNode receipt=service.submit(1,taskId,request);
         context.close(); context=new AnnotationConfigApplicationContext(Config.class);
+        jdbc=new JdbcTemplate(context.getBean(DataSource.class));
         matching=context.getBean(PlaygroundMatchingService.class); service=context.getBean(PlaygroundService.class); store=context.getBean(PlaygroundMapper.class);
         assertEquals(receipt,service.submit(1,taskId,request)); assertEquals(1,count("playground_actions"));
         assertEquals(1,store.seat(1).getAttemptsUsed());
@@ -2058,6 +2169,7 @@ class PlaygroundPersistenceTest {
 
         // Restart after a leased and budgeted task, before its action is submitted.
         context.close(); context=new AnnotationConfigApplicationContext(Config.class);
+        jdbc=new JdbcTemplate(context.getBean(DataSource.class));
         service=context.getBean(PlaygroundService.class); store=context.getBean(PlaygroundMapper.class);
         assertEquals(1,service.ownerActivity(1,id).path("game").path("operatedMonths").asInt());
         assertEquals("OFFER_NEGOTIATION",store.task(first.path("taskId").asLong()).getPhase());
@@ -2066,6 +2178,7 @@ class PlaygroundPersistenceTest {
 
         // Restart again with one decision persisted and the partner's task pending.
         context.close(); context=new AnnotationConfigApplicationContext(Config.class);
+        jdbc=new JdbcTemplate(context.getBean(DataSource.class));
         service=context.getBean(PlaygroundService.class); store=context.getBean(PlaygroundMapper.class);
         assertEquals(1,service.ownerEvents(1,id,0).stream().filter(e->"NPC_ORDER_DECISION".equals(e.path("kind").asText())).count());
         ObjectNode second=ready(1);
@@ -2096,6 +2209,7 @@ class PlaygroundPersistenceTest {
                 submission(second,decline,UUID.randomUUID().toString())).path("status").asText());
         assertEquals(0,service.ownerActivity(1,id).path("game").path("operatedMonths").asInt());
         context.close(); context=new AnnotationConfigApplicationContext(Config.class);
+        jdbc=new JdbcTemplate(context.getBean(DataSource.class));
         service=context.getBean(PlaygroundService.class); store=context.getBean(PlaygroundMapper.class);
         ObjectNode closing=ready(1); assertEquals("CLOSING",closing.path("phase").asText());
         assertEquals("FINAL_NOTE",closing.path("allowedActions").get(0).asText());

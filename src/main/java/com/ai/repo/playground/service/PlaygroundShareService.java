@@ -125,20 +125,41 @@ public class PlaygroundShareService {
         return Base64.getUrlEncoder().withoutPadding().encodeToString(bytes);
     }
 
+    private boolean safeCapacityOrder(JsonNode order) {
+        if(!order.isObject() || !onlyFields(order,Set.of("choice","signedMonth","status","deliveries"))
+                || !Set.of("SMALL","LARGE").contains(order.path("choice").asText())
+                || order.path("signedMonth").asInt()!=3
+                || !Set.of("ACTIVE","COMPLETED","BREACHED","CANCELLED").contains(order.path("status").asText())
+                || !order.path("deliveries").isArray() || order.path("deliveries").size()>3) return false;
+        int month=4, units=order.path("choice").asText().equals("SMALL")?2:4;
+        for(JsonNode d:order.path("deliveries")) {
+            if(!d.isObject() || !onlyFields(d,Set.of("month","reservedUnits","deliveredUnits","regularCapacity",
+                    "regularSoldUnits","revenueMinor","penaltyMinor","bonusMinor","fulfilled"))
+                    || d.path("month").asInt()!=month++ || d.path("reservedUnits").asInt()!=units
+                    || !d.path("fulfilled").isBoolean()) return false;
+            for(String field:List.of("deliveredUnits","regularCapacity","regularSoldUnits"))
+                if(!d.path(field).isIntegralNumber() || d.path(field).asInt()<0 || d.path(field).asInt()>6) return false;
+            for(String field:List.of("revenueMinor","penaltyMinor","bonusMinor"))
+                if(!d.path(field).isIntegralNumber() || d.path(field).asLong()<0 || d.path(field).asLong()>10000) return false;
+            if(d.path("deliveredUnits").asInt()>units
+                    || d.path("fulfilled").asBoolean()!=(d.path("deliveredUnits").asInt()==units)) return false;
+        }
+        return true;
+    }
     private boolean safeSnapshot(JsonNode payload) {
         int schema=payload.path("shareSchemaVersion").asInt();
-        if (!payload.isObject() || !Set.of(3,4,5).contains(schema) ||
+        if (!payload.isObject() || !Set.of(3,4,5,6,7).contains(schema) ||
                 !"ODD_SHOP".equals(payload.path("gameKey").asText())) return false;
         String outcome=payload.path("outcome").asText();
         if (!Set.of("OPERATED","UNOPENED").contains(outcome) ||
-                !onlyFields(payload,schema==5
+                !onlyFields(payload,schema>=5
                         ?Set.of("shareSchemaVersion","gameKey","outcome","horizonMonths","shop","agentMoves","business","foundingAgreement","partnerReviews")
                         :schema>=4
                         ?Set.of("shareSchemaVersion","gameKey","outcome","horizonMonths","shop","agentMoves","business","foundingAgreement")
                         :Set.of("shareSchemaVersion","gameKey","outcome","horizonMonths","shop","agentMoves","business"))) return false;
         if (payload.has("partnerReviews")) {
             JsonNode reviews=payload.path("partnerReviews");
-            if (schema!=5 || !outcome.equals("OPERATED") || !reviews.isArray() || reviews.size()!=2
+            if (schema<5 || !outcome.equals("OPERATED") || !reviews.isArray() || reviews.size()!=2
                     || !reviews.get(0).path("role").asText().equals("HOST")
                     || !reviews.get(1).path("role").asText().equals("GUEST")) return false;
             for (JsonNode review:reviews) {
@@ -183,12 +204,13 @@ public class PlaygroundShareService {
                         "CHECK_FRANCHISE_TERMS","CHECK_FRANCHISE_STORES","CHECK_FRANCHISE_SUPPLY",
                         "PROPOSE_FRANCHISE","COUNTER_FRANCHISE","ACCEPT_FRANCHISE","DECLINE_FRANCHISE")
                         .contains(move.path("move").asText())
-                    || schema==5 && Set.of("REPLY_MONTHLY","RETRACT_MONTHLY")
+                    || schema>=5 && Set.of("REPLY_MONTHLY","RETRACT_MONTHLY")
                         .contains(move.path("move").asText()))) return false;
         if (outcome.equals("UNOPENED")) return !payload.has("business");
         JsonNode business=payload.path("business");
-        if (!business.isObject() || !onlyFields(business,schema>=4
-                ?Set.of("ending","operatedMonths","netProfitMinor","months","franchise","returnedCapitalMinor","hostReturnedMinor","guestReturnedMinor")
+        if (!business.isObject() || !onlyFields(business,schema==7
+                ?Set.of("ending","operatedMonths","netProfitMinor","months","franchise","returnedCapitalMinor","hostReturnedMinor","guestReturnedMinor","capacityOrder","orderDecision")
+                :schema>=4?Set.of("ending","operatedMonths","netProfitMinor","months","franchise","returnedCapitalMinor","hostReturnedMinor","guestReturnedMinor")
                 :Set.of("ending","operatedMonths","netProfitMinor","months","franchise")) ||
                 !business.path("months").isArray()) return false;
         if (schema>=4 && (business.path("returnedCapitalMinor").asLong(-1)<0
@@ -196,6 +218,14 @@ public class PlaygroundShareService {
                 || business.path("guestReturnedMinor").asLong(-1)<0
                 || business.path("hostReturnedMinor").asLong()+business.path("guestReturnedMinor").asLong()
                     !=business.path("returnedCapitalMinor").asLong())) return false;
+        if(business.has("orderDecision")) {
+            JsonNode decision=business.path("orderDecision");
+            if(schema!=7 || !decision.isObject() || !onlyFields(decision,Set.of("resolution","choice","firstPlan","secondPlan","firstReply","secondReply"))
+                    || !Set.of("CONFIRMED_MATCH","COUNTER_ACCEPTED","DECLINED","RETRACTED","DEADLINE_FALLBACK","BUDGET_FALLBACK","MODEL_FAILURE_FALLBACK").contains(decision.path("resolution").asText())) return false;
+            for(String key:List.of("choice","firstPlan","secondPlan","firstReply","secondReply"))
+                if(!decision.path(key).isNull() && !Set.of("SMALL","LARGE","DECLINE").contains(decision.path(key).asText())) return false;
+        }
+        if(business.has("capacityOrder") && (schema!=7 || !safeCapacityOrder(business.path("capacityOrder")))) return false;
         if (business.has("franchise")) {
             JsonNode franchise=business.path("franchise");
             if (!franchise.isObject() || !onlyFields(franchise,Set.of("month","resolution","supportOutcome"))
@@ -206,9 +236,9 @@ public class PlaygroundShareService {
                     .contains(franchise.path("supportOutcome").asText())) return false;
         }
         for (JsonNode month:business.path("months")) {
-            if (!month.isObject() || !onlyFields(month,schema==5
+            if (!month.isObject() || !onlyFields(month,schema>=5
                     ?Set.of("month","profitMinor","events","signal","response","resolution","conflict",
-                            "effectivePlan","firstPlan","secondPlan","firstReply","secondReply")
+                            "effectivePlan","firstPlan","secondPlan","firstReply","secondReply","decisionImpact","incidentUnresolved")
                     :schema==4?Set.of("month","profitMinor","events","signal","response","resolution","conflict","tactic",
                             "firstPosition","secondPosition","counter","replyCounter","counterRounds")
                     :Set.of("month","profitMinor","events","signal","response","resolution")) || !month.path("events").isArray()) return false;
@@ -219,9 +249,11 @@ public class PlaygroundShareService {
             if (month.has("resolution") && !(Set.of("PARTNERS_APPROVED","DECLINED","DEADLINE_FALLBACK",
                     "BUDGET_FALLBACK","MODEL_FAILURE_FALLBACK","INDEPENDENT_CONSENSUS",
                     "COUNTER_ACCEPTED").contains(month.path("resolution").asText())
-                    || schema==5 && Set.of("CONFIRMED_MATCH","RETRACTED")
+                    || schema>=5 && Set.of("CONFIRMED_MATCH","RETRACTED")
                             .contains(month.path("resolution").asText()))) return false;
-            if (schema==5) {
+            if (schema>=5) {
+                if (month.has("decisionImpact") && (schema<6 || !safeDecisionImpact(month.path("decisionImpact")))) return false;
+                if (month.has("incidentUnresolved") && (schema<6 || !month.path("incidentUnresolved").isBoolean())) return false;
                 if (month.has("conflict")) try { V6ConflictRules.Kind.valueOf(month.path("conflict").asText()); }
                     catch (IllegalArgumentException error) { return false; }
                 for (String field:List.of("effectivePlan","firstPlan","secondPlan","firstReply","secondReply")) {
@@ -268,6 +300,26 @@ public class PlaygroundShareService {
         }
         return true;
     }
+    private boolean safeDecisionImpact(JsonNode impact) {
+        if (!impact.isObject() || impact.size()!=5 || !onlyFields(impact,
+                Set.of("basis","actual","signedFallback","firstPosition","secondPosition"))
+                || !impact.path("basis").asText().equals("SAME_MONTH_SAME_MARKET")) return false;
+        for (String name:List.of("actual","signedFallback","firstPosition","secondPosition")) {
+            JsonNode value=impact.path(name);
+            if ((name.equals("firstPosition") || name.equals("secondPosition")) && value.isNull()) continue;
+            if (!value.isObject() || value.size()!=6 || !onlyFields(value,
+                    Set.of("cashMinor","profitMinor","inventoryMinor","soldUnits","ending","opened"))
+                    || !value.path("opened").isBoolean()) return false;
+            for (String field:List.of("cashMinor","profitMinor","inventoryMinor","soldUnits"))
+                if (!value.path(field).isIntegralNumber() || !value.path(field).canConvertToLong()
+                        || value.path(field).asLong() < (field.equals("profitMinor")?-10_000_000:0)
+                        || value.path(field).asLong()>10_000_000) return false;
+            try { com.ai.repo.playground.rules.MonthlyShopRules.Ending.valueOf(value.path("ending").asText()); }
+            catch (IllegalArgumentException error) { return false; }
+        }
+        return true;
+    }
+
     private boolean safeAnnualPlan(JsonNode value,String conflictCode) {
         if (!value.isObject() || value.size()!=4 || !onlyFields(value,
                 Set.of("productionBand","marketingAction","serviceFocus","incidentResponse"))) return false;
@@ -337,9 +389,9 @@ public class PlaygroundShareService {
                 409,"ENDING_NOT_SHAREABLE");
         JsonNode plan=proposal.path("plan");
         List<String> privateText=privateTerms(activity);
-        boolean annual=Set.of("1.0","1.1").contains(view.path("ruleVersion").asText());
+        boolean annual=Set.of("1.0","1.1","1.2","1.3").contains(view.path("ruleVersion").asText());
         boolean v6=annual || view.path("ruleVersion").asText().equals("0.9");
-        ObjectNode result=json.createObjectNode().put("shareSchemaVersion",annual?5:v6?4:3).put("gameKey","ODD_SHOP")
+        ObjectNode result=json.createObjectNode().put("shareSchemaVersion",view.path("ruleVersion").asText().equals("1.3")?7:view.path("ruleVersion").asText().equals("1.2")?6:annual?5:v6?4:3).put("gameKey","ODD_SHOP")
                 .put("outcome",status.equals("SETTLED")?"OPERATED":"UNOPENED")
                 .put("horizonMonths",view.path("horizonMonths").asInt());
         if (v6 && status.equals("SETTLED")) {
@@ -402,6 +454,14 @@ public class PlaygroundShareService {
             JsonNode summary=view.path("summary");
             require(summary.isObject(),409,"ENDING_NOT_SHAREABLE");
             ObjectNode business=result.putObject("business");
+            if(result.path("shareSchemaVersion").asInt()==7 && view.path("capacityOrder").isObject())
+                business.set("capacityOrder",view.path("capacityOrder").deepCopy());
+            if(result.path("shareSchemaVersion").asInt()==7)
+                for(JsonNode e:events) if(e.path("kind").asText().equals("CAPACITY_ORDER_RESOLUTION")) {
+                    ObjectNode decision=business.putObject("orderDecision");
+                    for(String key:List.of("resolution","choice","firstPlan","secondPlan","firstReply","secondReply"))
+                        decision.set(key,e.path("facts").path(key).deepCopy());
+                }
             business.put("ending",summary.path("ending").asText());
             business.put("operatedMonths",summary.path("operatedMonths").asInt());
             business.put("netProfitMinor",summary.path("netProfitMinor").asLong());
@@ -450,6 +510,10 @@ public class PlaygroundShareService {
                             JsonNode facts=event.path("facts");
                             month.put("resolution",facts.path("resolution").asText());
                             month.put("response",facts.path("effectiveResponse").asText());
+                            if (result.path("shareSchemaVersion").asInt()>=6) {
+                                month.set("decisionImpact",facts.path("decisionImpact").deepCopy());
+                                month.put("incidentUnresolved",facts.path("incidentUnresolved").asBoolean());
+                            }
                             if (facts.path("effectivePlan").isObject())
                                 month.set("effectivePlan",facts.path("effectivePlan").deepCopy());
                             else month.put("effectivePlan","SIGNED_FALLBACK");
