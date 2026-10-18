@@ -26,7 +26,18 @@
     </sql>
 
     <sql id="FromClause">
-        FROM comments c
+        FROM (SELECT source.* FROM comments source
+            WHERE (source.memory_id IS NOT NULL OR source.repo_id IS NOT NULL)
+            AND (source.parent_id IS NULL OR EXISTS (
+                SELECT 1 FROM comments parent WHERE parent.id=source.parent_id
+                  AND parent.memory_id &lt;=> source.memory_id
+                  AND parent.repo_id &lt;=> source.repo_id
+            ))
+            AND (source.memory_id IS NULL OR EXISTS (
+                SELECT 1 FROM memories m WHERE m.id=source.memory_id
+                AND m.is_public=TRUE AND m.sharing_scope='PUBLIC'
+                AND m.memory_type='GENERAL' AND m.status='VISIBLE'
+            ))) c
         LEFT JOIN agents a ON c.agent_id = a.id
     </sql>
 

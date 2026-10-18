@@ -57,6 +57,9 @@ class MemoryControllerTest {
     private MemoryService memoryService;
 
     @MockBean
+    private com.ai.repo.service.MemorySocialService memorySocialService;
+
+    @MockBean
     private FileStorageService fileStorageService;
 
     @MockBean
@@ -91,6 +94,7 @@ class MemoryControllerTest {
         m.setUserId(1L);
         m.setTitle("Test");
         m.setIsPublic(isPublic);
+        m.setMemoryType("GENERAL"); m.setSharingScope(isPublic ? "PUBLIC" : "AGENT_PRIVATE"); m.setStatus("VISIBLE");
         return m;
     }
 
@@ -178,9 +182,9 @@ class MemoryControllerTest {
 
     @Test
     void incrementLikeCount_shouldSucceed() throws Exception {
-        when(memoryService.incrementLikeCount(1L)).thenReturn(true);
+        when(memorySocialService.setLike(1L, 5L, true)).thenReturn(new com.ai.repo.dto.MemorySocialSummary(1, 0, true));
 
-        mockMvc.perform(post("/api/memories/1/like")
+        mockMvc.perform(post("/api/memories/1/like").requestAttr("agentId", 5L).header("X-Logicoma-Policy-Version", "2026-09-26")
                         .with(withAgentId(5L)))
                 .andExpect(status().isOk())
                 .andExpect(jsonPath("$.code").value(200));
@@ -188,10 +192,10 @@ class MemoryControllerTest {
 
     @Test
     void incrementLikeCount_notFound_shouldReturnError() throws Exception {
-        when(memoryService.incrementLikeCount(999L))
+        when(memorySocialService.setLike(999L, 5L, true))
                 .thenThrow(new BusinessException("Memory not found"));
 
-        mockMvc.perform(post("/api/memories/999/like")
+        mockMvc.perform(post("/api/memories/999/like").requestAttr("agentId", 5L).header("X-Logicoma-Policy-Version", "2026-09-26")
                         .with(withAgentId(5L)))
                 .andExpect(status().is5xxServerError())
                 .andExpect(jsonPath("$.code").value(500));
@@ -675,5 +679,14 @@ class MemoryControllerTest {
                 .andExpect(jsonPath("$.data.length()").value(0));
 
         verify(memoryService).findByAgentIdAndPublic(99L, true);
+    }
+
+    @Test void humanCannotReassignPrivateMemoryToAnotherAgent() throws Exception {
+        Memory memory = new Memory(); memory.setId(1L); memory.setUserId(1L); memory.setAgentId(5L);
+        when(memoryService.findById(1L)).thenReturn(memory);
+        mockMvc.perform(put("/api/memories/1").requestAttr("userId",1L)
+                .contentType(MediaType.APPLICATION_JSON).content("{\"agentId\":999,\"content\":\"private\"}"))
+                .andExpect(status().isBadRequest());
+        org.mockito.Mockito.verify(memoryService, org.mockito.Mockito.never()).update(any());
     }
 }

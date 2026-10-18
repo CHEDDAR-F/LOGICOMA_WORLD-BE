@@ -23,6 +23,8 @@ class CommentServiceImplTest {
     @Mock
     private CommentMapper commentMapper;
 
+    @Mock private com.ai.repo.service.MemorySocialService memorySocialService;
+
     private CommentServiceImpl commentService;
 
     @BeforeEach
@@ -31,6 +33,7 @@ class CommentServiceImplTest {
         java.lang.reflect.Field mapperField = CommentServiceImpl.class.getDeclaredField("commentMapper");
         mapperField.setAccessible(true);
         mapperField.set(commentService, commentMapper);
+        org.springframework.test.util.ReflectionTestUtils.setField(commentService, "memorySocialService", memorySocialService);
     }
 
     private Comment buildComment(Long id, Long agentId, String content) {
@@ -38,6 +41,7 @@ class CommentServiceImplTest {
         comment.setId(id);
         comment.setAgentId(agentId);
         comment.setContent(content);
+        comment.setRepoId(1L);
         comment.setLikeCount(0);
         comment.setReplyCount(0);
         comment.setDownvoteCount(0);
@@ -78,17 +82,13 @@ class CommentServiceImplTest {
     }
 
     @Test
-    void create_withParentId_parentNotFound_shouldNotFail() {
+    void create_withParentId_parentNotFound_shouldReject() {
         Comment reply = buildComment(null, 5L, "Reply");
         reply.setParentId(999L);
 
-        when(commentMapper.insert(any(Comment.class))).thenReturn(1);
         when(commentMapper.selectById(999L)).thenReturn(null);
-
-        Comment result = commentService.create(reply);
-
-        assertNotNull(result);
-        verify(commentMapper).insert(reply);
+        assertThrows(BusinessException.class, () -> commentService.create(reply));
+        verify(commentMapper, never()).insert(any());
         verify(commentMapper).selectById(999L);
         verify(commentMapper, never()).update(any());
     }
@@ -99,12 +99,12 @@ class CommentServiceImplTest {
     void update_shouldUpdateExistingComment() {
         Comment comment = buildComment(1L, 5L, "Updated");
         when(commentMapper.selectById(1L)).thenReturn(comment);
-        when(commentMapper.update(any(Comment.class))).thenReturn(1);
+        when(commentMapper.updateContent(any(Comment.class))).thenReturn(1);
 
         Comment result = commentService.update(comment);
 
         assertEquals("Updated", result.getContent());
-        verify(commentMapper).update(comment);
+        verify(commentMapper).updateContent(comment);
     }
 
     @Test
@@ -240,6 +240,7 @@ class CommentServiceImplTest {
 
     @Test
     void incrementLikeCount_shouldCallMapper() {
+        when(commentMapper.selectById(1L)).thenReturn(buildComment(1L, 5L, "Hello"));
         when(commentMapper.incrementLikeCount(1L)).thenReturn(1);
 
         boolean result = commentService.incrementLikeCount(1L);
@@ -250,8 +251,43 @@ class CommentServiceImplTest {
 
     @Test
     void incrementLikeCount_notFound_shouldThrowException() {
-        when(commentMapper.incrementLikeCount(999L)).thenReturn(0);
+        when(commentMapper.selectById(999L)).thenReturn(null);
 
         assertThrows(BusinessException.class, () -> commentService.incrementLikeCount(999L));
+    }
+
+    @Test void privateMemoryRejectsCommentBeforeInsert() {
+        Comment c = buildComment(null, 5L, "Hello");
+        c.setRepoId(null); c.setMemoryId(20L);
+        doThrow(new BusinessException(404, "Not public")).when(memorySocialService).requirePublic(20L, true);
+        assertThrows(BusinessException.class, () -> commentService.create(c));
+        verify(commentMapper, never()).insert(any());
+    }
+    @Test void crossMemoryReplyIsRejected() {
+        Comment c = buildComment(null, 5L, "Reply");
+        c.setRepoId(null); c.setMemoryId(20L); c.setParentId(1L);
+        Comment parent = buildComment(1L, 6L, "Parent");
+        parent.setRepoId(null); parent.setMemoryId(21L);
+        when(commentMapper.selectById(1L)).thenReturn(parent);
+        assertThrows(BusinessException.class, () -> commentService.create(c));
+        verify(commentMapper, never()).insert(any());
+    }
+    @Test void forgedIdentityCountersAndTargetCannotMoveOnEdit() {
+        Comment original = buildComment(1L, 5L, "Original");
+        when(commentMapper.selectById(1L)).thenReturn(original);
+        Comment update = buildComment(1L, 999L, "Edited");
+        update.setMemoryId(44L); update.setLikeCount(999);
+        Comment result = commentService.update(update);
+        assertEquals(5L, result.getAgentId());
+        assertNull(result.getMemoryId());
+        assertEquals(0, result.getLikeCount());
+        assertEquals("Edited", result.getContent());
+    }
+    @Test void ambiguousTargetAndBlankContentAreRejected() {
+        Comment c = buildComment(null, 5L, "Hello"); c.setMemoryId(1L);
+        assertThrows(BusinessException.class, () -> commentService.create(c));
+        c.setMemoryId(null); c.setContent("  ");
+        assertThrows(BusinessException.class, () -> commentService.create(c));
+        verify(commentMapper, never()).insert(any());
     }
 }

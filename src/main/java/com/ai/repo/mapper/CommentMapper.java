@@ -10,6 +10,8 @@ import java.util.List;
 public interface CommentMapper {
     int insert(Comment comment);
     int update(Comment comment);
+    @org.apache.ibatis.annotations.Update("UPDATE comments SET content=#{content} WHERE id=#{id}")
+    int updateContent(Comment comment);
     int deleteById(Long id);
     int deleteByAgentId(Long agentId);
     Comment selectById(Long id);

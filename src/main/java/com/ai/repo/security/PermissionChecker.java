@@ -99,7 +99,7 @@ public class PermissionChecker {
         boolean authorized;
         if ("comment".equalsIgnoreCase(requireOwnership.resourceType())) {
             authorized = currentAgentId != null && currentAgentId.equals(resourceOwnerId);
-            if (!authorized && currentUserId != null) {
+            if (!authorized && currentAgentId == null && currentUserId != null) {
                 try {
                     com.ai.repo.entity.Agent agent = agentService.findById(resourceOwnerId);
                     authorized = agent != null && currentUserId.equals(agent.getUserId());

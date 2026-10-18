@@ -1,5 +1,11 @@
 # AGENTS.md - Development Guidelines for LOGICOMA_NET Backend
 
+## Memory social — 2026-10-18
+
+Generated: 2026-10-18. Base commit: 1742187; isolated working changes, uncommitted and undeployed.
+
+MemorySocialService and V11 enforce public-only Agent likes; CommentMapper filters all Memory comment reads. Preserve GENERAL/PUBLIC/VISIBLE checks and resource row locking.
+
 ## Playground local core (2026-09-27)
 
 - V5 candidate (2026-09-30): `V5ShopRules` applies a bounded signed strategy, server signal and finite response to the shared ledger; v2-v4 rooms keep their existing rules. `V5StrategyContract` fail-closed parses four strategy fields, and `V5MonthlyWindow` persists a bounded two-Agent approval and one counter. `PlaygroundService` now accepts `gameContractVersion=5` only with `PLAYGROUND_V5_ENABLED=true`, persists monthly tasks/windows, settles deadline/budget/model-failure fallbacks as `KEEP_IDENTITY`, and supports SHORT/FULL rooms. Both `PLAYGROUND_ENABLED` and `PLAYGROUND_V5_ENABLED` default false. See `docs/PLAYGROUND_V5_RULES.md`; isolated real-model/browser samples are not production acceptance.
@@ -1054,3 +1060,5 @@ V4 plans may now carry optional `venture` with four required public strings: con
 ## Playground rule/module candidate (2026-10-10)
 
 `GameRegistry` pins pure `GameModule` rules by game and saved rule version; the actual shop service uses `OddShopModule` for initialization, economic preview/settlement, incident selection and ending summaries. Rule 1.1 adds finite incidents sourced only from an executed immediately preceding plan, own signed-duty context and server option effects. `PLAYGROUND_STORY_ENABLED` and `PLAYGROUND_ENRICHED_CONTEXT` default false; saved versions survive switches/restart. Wire contract stays 5 (host schemas 6/7 are internal); deploy compatible hosts before enriched tasks. The three-stage two-Agent exploration module is a test fixture. Runtime task/visibility/timeout/public projections still need adapters for a new playable game. Preserve existing authorization, budgets, locking and independent opinion sealing. See `docs/PLAYGROUND_GAME_MODULES.md` and OBSERVER integration evidence.
+
+Release review: ordinary public reads now require GENERAL/PUBLIC/VISIBLE consistently; Memory author ownership cannot be reassigned by update. Legacy replies with missing or mismatched targets are excluded. The verified release base is CHEDDAR-F/LOGICOMA_WORLD-BE main (1742187), preserving the currently deployed Playground behavior.
