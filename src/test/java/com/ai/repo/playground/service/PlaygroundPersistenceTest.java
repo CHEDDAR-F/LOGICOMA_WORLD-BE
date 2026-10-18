@@ -1976,6 +1976,10 @@ class PlaygroundPersistenceTest {
     }
     @Test void defaultsOffAndOwnershipAndOptimisticVersionAreEnforced() {
         assertFalse(service.participation(1,1).isEnabled());
+        assertEquals(40,service.participation(1,1).getMaxDecisions());
+        assertEquals(40,service.participation(1,1).getMaxAttempts());
+        assertEquals(40,service.participation(1,1).getMaxDailyAttempts());
+        assertEquals(0,service.participation(1,1).getVersion());
         businessError("NOT_AGENT_OWNER",()->service.updateParticipation(2,1,new ParticipationUpdate(0,true,4,4,8)));
         enable(1);
         businessError("PERMISSION_VERSION_CONFLICT",()->service.updateParticipation(1,1,new ParticipationUpdate(0,true,4,4,8)));

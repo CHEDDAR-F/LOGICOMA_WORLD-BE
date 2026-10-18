@@ -105,8 +105,8 @@ public class PlaygroundService {
         Participation result = store.participation(agentId);
         if (result != null) return result;
         result = new Participation(); result.setAgentId(agentId); result.setUserId(userId);
-        result.setVersion(0L); result.setEnabled(false); result.setMaxDecisions(4);
-        result.setMaxAttempts(4); result.setMaxDailyAttempts(8);
+        result.setVersion(0L); result.setEnabled(false); result.setMaxDecisions(40);
+        result.setMaxAttempts(40); result.setMaxDailyAttempts(40);
         return result;
     }
     @Transactional

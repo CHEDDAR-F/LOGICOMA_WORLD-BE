@@ -362,3 +362,8 @@ Default-off negotiation-stakes candidate: physical incident fallbacks, public-ca
 ## Playground capacity orders — 2026-10-18
 
 Rule 1.3 adds a month-3 independent order negotiation and actual capacity commitments for months 4–6. Preserve old saved rules and Memory social changes. New private/public order views show finite decisions and actual deliveries; do not expose owner guidance or manufacture conflict. See `docs/PLAYGROUND_CAPACITY_ORDERS.md`; default new-room orders gate is false, production activation requires compatible Host schema 9.
+
+
+### Default Playground allowance
+
+New participation drafts default to 40 actions/game, 40 inference attempts/game and 40 attempts/day, with participation still disabled until the owner saves consent. The UI displays this fixed allowance rather than requiring three numeric edits; saving explicitly grants 40/40/40. Existing saved grants remain unchanged until that owner action. Production annual builds must include PLAYGROUND_ENABLED, V5 and V6 build flags together; the deployed compiled annual gate must be verified.
