@@ -44,7 +44,7 @@ class MemoryImageMysqlTest {
         jdbc.execute("DROP TABLE IF EXISTS skill_publication_requests");
         jdbc.execute("CREATE TABLE users(id BIGINT PRIMARY KEY)");
         jdbc.execute("CREATE TABLE agents(id BIGINT PRIMARY KEY, user_id BIGINT)");
-        jdbc.execute("CREATE TABLE memories(id BIGINT PRIMARY KEY, uid VARCHAR(32), user_id BIGINT, agent_id BIGINT, title TEXT, content TEXT, version VARCHAR(20), description TEXT, file_path TEXT, file_size BIGINT, mime_type VARCHAR(100), tags TEXT, category TEXT, is_public BOOLEAN, status VARCHAR(20), download_count INT, like_count INT, metadata TEXT, memory_type VARCHAR(30), sharing_scope VARCHAR(30), owner_type VARCHAR(20), client_memory_key VARCHAR(200), schema_version VARCHAR(20), revision INT, profile_request_hash VARCHAR(64), created_at DATETIME DEFAULT CURRENT_TIMESTAMP, updated_at DATETIME DEFAULT CURRENT_TIMESTAMP)");
+        jdbc.execute("CREATE TABLE memories(id BIGINT PRIMARY KEY AUTO_INCREMENT, uid VARCHAR(32) NOT NULL UNIQUE, user_id BIGINT, agent_id BIGINT, title TEXT, content TEXT, version VARCHAR(20), description TEXT, file_path TEXT, file_size BIGINT, mime_type VARCHAR(100), tags TEXT, category TEXT, is_public BOOLEAN, status VARCHAR(20) NOT NULL DEFAULT 'VISIBLE', download_count INT, like_count INT, metadata TEXT, memory_type VARCHAR(30), sharing_scope VARCHAR(30), owner_type VARCHAR(20), client_memory_key VARCHAR(200), schema_version VARCHAR(20), revision INT NOT NULL DEFAULT 1, profile_request_hash VARCHAR(64), created_at DATETIME DEFAULT CURRENT_TIMESTAMP, updated_at DATETIME DEFAULT CURRENT_TIMESTAMP)");
         jdbc.execute("CREATE TABLE skill_publication_requests(id BIGINT PRIMARY KEY)");
         var populator = new org.springframework.jdbc.datasource.init.ResourceDatabasePopulator(
             new ClassPathResource("db/migration/V9_4__add_memory_publication_requests.sql"),
@@ -52,7 +52,7 @@ class MemoryImageMysqlTest {
         populator.execute(ds);
         jdbc.update("INSERT INTO users VALUES(1),(2)");
         jdbc.update("INSERT INTO agents VALUES(1,1),(2,1),(3,2)");
-        jdbc.update("INSERT INTO memories(id,user_id,agent_id,title,content,is_public,status,memory_type,sharing_scope) VALUES(1,1,1,'Moment','Private body',FALSE,'VISIBLE','GENERAL','AGENT_PRIVATE'),(2,1,1,'Other','Other',FALSE,'VISIBLE','GENERAL','AGENT_PRIVATE')");
+        jdbc.update("INSERT INTO memories(id,uid,user_id,agent_id,title,content,is_public,status,memory_type,sharing_scope) VALUES(1,'fixture1',1,1,'Moment','Private body',FALSE,'VISIBLE','GENERAL','AGENT_PRIVATE'),(2,'fixture2',1,1,'Other','Other',FALSE,'VISIBLE','GENERAL','AGENT_PRIVATE')");
         var config = new org.apache.ibatis.session.Configuration(); config.setMapUnderscoreToCamelCase(true);
         config.addMapper(MemoryImageMapper.class);
         var factory = new SqlSessionFactoryBean(); factory.setDataSource(ds); factory.setConfiguration(config);
@@ -181,5 +181,24 @@ class MemoryImageMysqlTest {
             });
         } finally { pool.shutdownNow(); }
         assertEquals(false,jdbc.queryForObject("SELECT is_public FROM memories WHERE id=1",Boolean.class));
+    }
+    @Test void memoryControllerCreatesAUidBeforeImageUpload() throws Exception {
+        var store=new com.ai.repo.service.impl.MemoryServiceImpl();
+        var mapperField=MemoryImageService.class.getDeclaredField("memoryMapper"); mapperField.setAccessible(true);
+        ReflectionTestUtils.setField(store,"memoryMapper",mapperField.get(service));
+        var controller=new com.ai.repo.controller.MemoryController();
+        ReflectionTestUtils.setField(controller,"memoryService",store);
+        ReflectionTestUtils.setField(controller,"objectMapper",new com.fasterxml.jackson.databind.ObjectMapper());
+        var mvc=org.springframework.test.web.servlet.setup.MockMvcBuilders.standaloneSetup(controller)
+            .setControllerAdvice(new com.ai.repo.exception.GlobalExceptionHandler()).build();
+        var response=mvc.perform(post("/api/memories").requestAttr("userId",1L).requestAttr("agentId",1L)
+            .header("X-Logicoma-Policy-Version","2026-09-26").contentType("application/json")
+            .content("{\"title\":\"Real controller creation\",\"content\":\"Before image upload\",\"clientMemoryKey\":\"image-http-create\",\"isPublic\":false}"))
+            .andExpect(status().isOk()).andExpect(jsonPath("$.data.uid").isNotEmpty()).andReturn();
+        var memory=new com.fasterxml.jackson.databind.ObjectMapper().readTree(response.getResponse().getContentAsString()).get("data");
+        assertTrue(memory.get("uid").asText().matches("[0-9a-f]{32}"));
+        long id=memory.get("id").asLong();
+        var file=png(42);
+        assertNotNull(tx.execute(s -> service.upload(id,1L,1L,file)).getId());
     }
 }
