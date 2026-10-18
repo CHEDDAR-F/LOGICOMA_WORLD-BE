@@ -20,6 +20,7 @@ import static org.mockito.Mockito.*;
 @ExtendWith(MockitoExtension.class)
 class MemoryPublicationRequestServiceImplTest {
     @Mock MemoryMapper memories;
+    @Mock com.ai.repo.mapper.MemoryImageMapper images;
     @Mock MemoryPublicationRequestMapper requests;
     MemoryPublicationRequestServiceImpl service;
     Memory memory;
@@ -28,6 +29,7 @@ class MemoryPublicationRequestServiceImplTest {
     @BeforeEach void setup() {
         service = new MemoryPublicationRequestServiceImpl();
         ReflectionTestUtils.setField(service, "memoryMapper", memories);
+        ReflectionTestUtils.setField(service, "imageMapper", images);
         ReflectionTestUtils.setField(service, "requestMapper", requests);
         ReflectionTestUtils.setField(service, "objectMapper", new ObjectMapper());
         ReflectionTestUtils.setField(service, "frontendUrl", "https://logicomanet.com");
@@ -38,7 +40,8 @@ class MemoryPublicationRequestServiceImplTest {
         memory.setTitle("Working notes"); memory.setContent("Reviewed content");
     }
     private String create() {
-        when(memories.selectById(42L)).thenReturn(memory);
+        lenient().when(memories.selectById(42L)).thenReturn(memory);
+        when(memories.selectByIdForUpdate(42L)).thenReturn(memory);
         doAnswer(call -> { saved = call.getArgument(0); saved.setId(10L); return 1; }).when(requests).insert(any());
         var result = service.create(5L, 1L, 42L);
         when(requests.selectByTokenHash(anyString())).thenReturn(saved);
@@ -65,7 +68,7 @@ class MemoryPublicationRequestServiceImplTest {
         when(requests.decide(10L, 1L, "APPROVED")).thenReturn(1);
         when(memories.publishPrivateGeneral(42L, 1L, 5L)).thenReturn(1);
         service.approve(id, 1L);
-        verify(memories).selectByIdForUpdate(42L);
+        verify(memories, times(2)).selectByIdForUpdate(42L);
         verify(memories).publishPrivateGeneral(42L, 1L, 5L);
         saved.setStatus("APPROVED");
         assertEquals(409, assertThrows(BusinessException.class, () -> service.approve(id, 1L)).getCode());
@@ -91,7 +94,8 @@ class MemoryPublicationRequestServiceImplTest {
         verify(memories, never()).publishPrivateGeneral(any(), any(), any());
     }
     @Test void profileBannedPublicAndForeignMemoriesCannotGetLinks() {
-        when(memories.selectById(42L)).thenReturn(memory);
+        lenient().when(memories.selectById(42L)).thenReturn(memory);
+        when(memories.selectByIdForUpdate(42L)).thenReturn(memory);
         memory.setMemoryType("USER_PROFILE");
         assertEquals(409, assertThrows(BusinessException.class, () -> service.create(5L, 1L, 42L)).getCode());
         memory.setMemoryType("GENERAL"); memory.setStatus("BANNED");
@@ -101,5 +105,14 @@ class MemoryPublicationRequestServiceImplTest {
         memory.setIsPublic(false); memory.setAgentId(6L);
         assertEquals(403, assertThrows(BusinessException.class, () -> service.create(5L, 1L, 42L)).getCode());
         verifyNoInteractions(requests);
+    }
+    @Test void changingAttachmentsInvalidatesReview() {
+        String id = create();
+        var image = new com.ai.repo.entity.MemoryImage();
+        image.setId("immutable-image"); image.setSha256("new-content-hash");
+        when(images.listForReview(42L)).thenReturn(java.util.List.of(image));
+        assertEquals("CHANGED", service.status(id, 5L).status());
+        assertThrows(BusinessException.class, () -> service.approve(id, 1L));
+        verify(requests, never()).decide(any(), any(), eq("APPROVED"));
     }
 }
