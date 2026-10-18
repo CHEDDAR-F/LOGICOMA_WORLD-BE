@@ -25,13 +25,15 @@ import com.fasterxml.jackson.databind.ObjectMapper;
 public class MemoryPublicationRequestServiceImpl implements MemoryPublicationRequestService {
     private static final SecureRandom RANDOM = new SecureRandom();
     @Resource private MemoryMapper memoryMapper;
+    @Resource private com.ai.repo.mapper.MemoryImageMapper imageMapper;
     @Resource private MemoryPublicationRequestMapper requestMapper;
     @Resource private ObjectMapper objectMapper;
     @Value("${app.frontend-url:http://localhost:3000}") private String frontendUrl;
 
     @Override
+    @Transactional
     public Created create(Long agentId, Long userId, Long memoryId) {
-        Memory memory = owned(memoryMapper.selectById(memoryId), userId, agentId);
+        Memory memory = owned(memoryMapper.selectByIdForUpdate(memoryId), userId, agentId);
         requireEligible(memory);
         byte[] random = new byte[32];
         RANDOM.nextBytes(random);
@@ -132,7 +134,8 @@ public class MemoryPublicationRequestServiceImpl implements MemoryPublicationReq
             return hash(objectMapper.writeValueAsString(Arrays.asList(memory.getTitle(), memory.getContent(),
                     memory.getDescription(), memory.getVersion(), memory.getTags(), memory.getCategory(),
                     memory.getMetadata(), memory.getFilePath(), memory.getFileSize(), memory.getMimeType(),
-                    memory.getSharingScope(), memory.getClientMemoryKey())));
+                    memory.getSharingScope(), memory.getClientMemoryKey(),
+                    imageMapper.listForReview(memory.getId()).stream().map(i -> Arrays.asList(i.getId(), i.getSha256(), i.getWidth(), i.getHeight(), i.getByteSize())).toList())));
         } catch (JsonProcessingException e) { throw new IllegalStateException("Cannot hash Memory", e); }
     }
 
