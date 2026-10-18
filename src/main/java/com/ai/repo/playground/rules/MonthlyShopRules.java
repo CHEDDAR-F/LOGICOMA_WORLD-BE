@@ -59,7 +59,7 @@ public final class MonthlyShopRules {
         public static final TradingAdjustment NONE = new TradingAdjustment(0, 0, List.of(), 0, null);
         public TradingAdjustment {
             require(extraExpenseMinor >= 0 && extraExpenseMinor <= 10_000
-                    && extraUnitCostMinor >= 0 && extraUnitCostMinor <= 600
+                    && extraUnitCostMinor >= 0 && extraUnitCostMinor <= 1_200
                     && extraBuyerWillingnessCoins != null && extraBuyerWillingnessCoins.size() <= 3
                     && extraBuyerWillingnessCoins.stream().allMatch(price -> price != null && price >= 12 && price <= 34)
                     && lostBuyers >= 0 && lostBuyers <= 4
@@ -208,6 +208,15 @@ public final class MonthlyShopRules {
         long first = state.cashMinor() / 2;
         return new Summary(state.ending(), state.operatedMonths(), state.failedOpeningMonth(), state.cashMinor(),
                 state.cashMinor() - CAPITAL, first, state.cashMinor() - first, state.reports());
+    }
+    /** V6 signed terms replace the legacy equal payout without changing the shared ledger. */
+    public Summary summary(State state, V6FoundingAgreement agreement) {
+        require(agreement != null, "INVALID_FOUNDING_AGREEMENT");
+        require(state.ending() != Ending.RUNNING, "GAME_NOT_FINISHED");
+        V6FoundingAgreement.Allocation allocation = agreement.allocate(state.cashMinor());
+        return new Summary(state.ending(), state.operatedMonths(), state.failedOpeningMonth(),
+                state.cashMinor(), allocation.netProfitMinor(), allocation.hostReturnedMinor(),
+                allocation.guestReturnedMinor(), state.reports());
     }
     private State liquidate(State state, Ending ending, Integer failedOpeningMonth) {
         long book = inventoryValue(state.inventory());

@@ -12,8 +12,8 @@ public final class PlaygroundRequests {
         default void rejectUnknown(String key, Object value) { throw new IllegalArgumentException("UNKNOWN_PLAYGROUND_FIELD"); }
     }
     public record ParticipationUpdate(@Min(0) long expectedVersion, @NotNull Boolean enabled,
-                                      @Min(1) @Max(6) int maxDecisions, @Min(1) @Max(6) int maxAttempts,
-                                      @Min(1) @Max(12) int maxDailyAttempts) implements StrictRequest {}
+                                      @Min(1) @Max(40) int maxDecisions, @Min(1) @Max(40) int maxAttempts,
+                                      @Min(1) @Max(40) int maxDailyAttempts) implements StrictRequest {}
     public record OwnerBrief(@NotBlank @Size(max=160) String theme,
                              @NotNull @Pattern(regexp="PROFIT|CHARACTER|COOPERATION|FREE") String priority,
                              @NotNull @Size(max=5) List<@NotBlank @Size(max=200) String> hardConstraints,

@@ -40,6 +40,7 @@ public class PlaygroundMatchingService {
         store.lockAgent(request.agentId());
         Participation permission=store.lockParticipation(request.agentId());
         require(permission!=null && permission.isEnabled(),403,"PARTICIPATION_DISABLED");
+        if (games.requiresAnnualGrant(request.mode(),contractVersion)) games.annualGrant(permission);
         require(idle(request.agentId(),true),409,"AGENT_ALREADY_IN_ACTIVITY");
         require(online(request.agentId()),409,"AGENT_RUNTIME_NOT_RECENT");
         require(budget(request.agentId(),permission),429,"DAILY_BUDGET_EXHAUSTED");
@@ -108,7 +109,12 @@ public class PlaygroundMatchingService {
     private boolean eligible(MatchEntry row,boolean locked) {
         try { games.participation(row.getUserId(),row.getAgentId()); } catch (BusinessException disabled) { return false; }
         Participation p=locked ? store.lockParticipation(row.getAgentId()) : store.participation(row.getAgentId());
-        return p!=null && p.isEnabled() && p.getVersion().equals(row.getPermissionVersion()) && idle(row.getAgentId(),locked) && online(row.getAgentId()) && budget(row.getAgentId(),p);
+        if (p==null || !p.isEnabled()) return false;
+        OwnerBrief brief=read(row.getBriefJson(),OwnerBrief.class);
+        if (games.requiresAnnualGrant(row.getMode(),games.contractVersionFor(brief))
+                && (p.getMaxDecisions()<40 || p.getMaxAttempts()<40 || p.getMaxDailyAttempts()<40)) return false;
+        return p.getVersion().equals(row.getPermissionVersion()) && idle(row.getAgentId(),locked)
+                && online(row.getAgentId()) && budget(row.getAgentId(),p);
     }
     private boolean idle(long actor,boolean locked) { return store.activeRoomCount(actor)==0 && (locked ? store.seat(actor)==null : store.seatCount(actor)==0); }
     private boolean online(long actor) { Agent a=agents.selectById(actor); return a!=null && !"DISABLED".equals(a.getStatus()) && a.getLastHeartbeatAt()!=null && a.getLastHeartbeatAt().isAfter(now().minusMinutes(10)); }

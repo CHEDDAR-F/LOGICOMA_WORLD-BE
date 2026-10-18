@@ -53,8 +53,17 @@ public final class V5ShopRules {
     public MonthResult advance(MonthlyShopRules.State game, Strategy strategy,
                                Signal signal, Response response,V5FranchiseOffer franchise,
                                boolean variableDemand) {
+        return advance(game,strategy,signal,response,franchise,variableDemand,
+                MonthlyShopRules.TradingAdjustment.NONE);
+    }
+
+    /** Rule 0.9 overlays one server-selected conflict or a persisted echo. */
+    public MonthResult advance(MonthlyShopRules.State game, Strategy strategy,
+                               Signal signal, Response response,V5FranchiseOffer franchise,
+                               boolean variableDemand,MonthlyShopRules.TradingAdjustment external) {
         require(game != null && strategy != null && signal != null && response != null,
                 "INVALID_V5_MONTH");
+        require(external != null,"INVALID_V5_MONTH");
         int month = game.operatedMonths() + 1;
         require(month <= game.horizonMonths(), "GAME_FINISHED");
         MonthlyShopRules.Shock expected = switch (signal) {
@@ -69,13 +78,14 @@ public final class V5ShopRules {
         MonthlyShopRules.Shock active = month >= environment.fromMonth() && month <= environment.throughMonth()
                 ? environment.shock() : MonthlyShopRules.Shock.NONE;
         require(active == expected, "SIGNAL_ENVIRONMENT_MISMATCH");
-        require(signal != Signal.NORMAL || response == Response.KEEP_IDENTITY,
+        require(signal != Signal.NORMAL || external.eventCode()!=null || response == Response.KEEP_IDENTITY,
                 "DECISION_WITHOUT_SIGNAL");
-        require(response != Response.PROMOTE || strategy.channel() != Channel.NONE,
+        require(response != Response.PROMOTE || strategy.channel() != Channel.NONE
+                        || external.eventCode()!=null,
                 "PROMOTION_CHANNEL_REQUIRED");
 
         long essential = (active == MonthlyShopRules.Shock.RENT_RENEWAL ? 2_800 : 2_000)
-                + (month == 1 ? 4_000 : 0);
+                + (month == 1 ? 4_000 : 0) + external.extraExpenseMinor();
         long franchiseExpense=franchise==null?0:franchise.entryCost(month)+franchise.monthlyCost(month);
         long standingCost = strategy.monthlyMarketingBudgetMinor();
         boolean guard = game.cashMinor() - essential - franchiseExpense - standingCost < strategy.minimumReserveMinor();
@@ -88,7 +98,7 @@ public final class V5ShopRules {
         require(game.cashMinor() - essential - franchiseExpense - standingCost - decisionCost >= strategy.minimumReserveMinor()
                 || response == Response.KEEP_IDENTITY, "V5_CHOICE_UNAFFORDABLE");
 
-        List<Integer> extraBuyers = new ArrayList<>();
+        List<Integer> extraBuyers = new ArrayList<>(external.extraBuyerWillingnessCoins());
         if (!guard && standingCost > 0) extraBuyers.add(strategy.unitPriceCoins());
         // A signed audience-service fit retains one bounded customer during a market shift.
         if (signal == Signal.MARKET_SHIFT && (
@@ -102,18 +112,21 @@ public final class V5ShopRules {
         if (response == Response.TEMPORARY_PIVOT && extraBuyers.size() < 3) extraBuyers.add(12);
         if (franchise!=null && franchise.supportBuyers(month)>0 && extraBuyers.size()<3)
             extraBuyers.add(strategy.unitPriceCoins());
-        int lostBuyers = signal == Signal.COMPETITOR ? 2 : signal == Signal.SUPPLY_DELAY ? 1 : 0;
-        List<String> marketEvents = new ArrayList<>();
-        if (signal == Signal.SUPPLY_DELAY) marketEvents.add("SUPPLY_DELAY");
+        int lostBuyers = (signal == Signal.COMPETITOR ? 2 : signal == Signal.SUPPLY_DELAY ? 1 : 0)
+                + external.lostBuyers();
+        List<String> marketEvents = new ArrayList<>(external.marketEvents());
+        if (signal == Signal.SUPPLY_DELAY && marketEvents.size()<2) marketEvents.add("SUPPLY_DELAY");
         if (variableDemand) {
             int pulse = footfallPulse(game.environment().demandSeed(),month);
             if (pulse < 0) lostBuyers += -pulse;
             else for (int i=0;i<pulse && extraBuyers.size()<3;i++)
                 extraBuyers.add(strategy.unitPriceCoins());
-            if (pulse <= -2) marketEvents.add("QUIET_STREET");
-            else if (pulse == -1) marketEvents.add("SLOW_WEEK");
-            else if (pulse == 1) marketEvents.add("NEIGHBORHOOD_BUZZ");
-            else if (pulse >= 2) marketEvents.add("LOCAL_RUSH");
+            if (marketEvents.size()<2) {
+                if (pulse <= -2) marketEvents.add("QUIET_STREET");
+                else if (pulse == -1) marketEvents.add("SLOW_WEEK");
+                else if (pulse == 1) marketEvents.add("NEIGHBORHOOD_BUZZ");
+                else if (pulse >= 2) marketEvents.add("LOCAL_RUSH");
+            }
         }
         if (extraBuyers.size() > 3) extraBuyers = new ArrayList<>(extraBuyers.subList(0, 3));
         int price = response == Response.TEMPORARY_PIVOT ? 12 : strategy.unitPriceCoins();
@@ -125,11 +138,12 @@ public final class V5ShopRules {
                 - (response == Response.TEMPORARY_PIVOT ? 1 : 2));
         MonthlyShopRules.Plan plan = new MonthlyShopRules.Plan(production, price, strategy.minimumReserveMinor());
         MonthlyShopRules.TradingAdjustment adjustment = new MonthlyShopRules.TradingAdjustment(
-                standingCost + decisionCost + franchiseExpense,
+                standingCost + decisionCost + franchiseExpense + external.extraExpenseMinor(),
                 (franchise==null?0:franchise.unitPremium(month))
-                        + (signal==Signal.SUPPLY_DELAY ? 200 : 0),extraBuyers,
+                        + (signal==Signal.SUPPLY_DELAY ? 200 : 0) + external.extraUnitCostMinor(),extraBuyers,
                 Math.min(variableDemand?4:2,lostBuyers+(franchise==null?0:franchise.lostBuyers(month))),
-                franchise==null?"V5_" + response.name():franchise.resultEvent(month),marketEvents,
+                external.eventCode()!=null?external.eventCode():
+                        franchise==null?"V5_" + response.name():franchise.resultEvent(month),marketEvents,
                 variableDemand
                         ? (signal==Signal.MARKET_SHIFT
                             ? List.of(10,10,12,12,14,26) : List.of(10,12,14,15,28,34))

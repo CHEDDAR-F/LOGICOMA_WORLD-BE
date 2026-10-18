@@ -68,7 +68,8 @@ class PlaygroundPersistenceTest {
         @Bean PlaygroundMatchingService matchingService(PlaygroundMapper mapper,AgentMapper agents,PlaygroundService games) { return new PlaygroundMatchingService(mapper,agents,games,json,clock); }
         @Bean PlaygroundService playgroundService(PlaygroundMapper mapper,AgentMapper agents,UserMapper users) {
             return new PlaygroundService(mapper,agents,users,json,true,true,
-                    Boolean.parseBoolean(System.getenv("PLAYGROUND_FRANCHISE_TEST")),clock);
+                    Boolean.parseBoolean(System.getenv("PLAYGROUND_FRANCHISE_TEST")),
+                    Boolean.parseBoolean(System.getenv("PLAYGROUND_MODEL_TEST_ANNUAL")),clock);
         }
         @Bean PlaygroundShareService playgroundShareService(PlaygroundMapper mapper,PlaygroundService games) {
             return new PlaygroundShareService(mapper,games,json,true,clock);
@@ -76,11 +77,12 @@ class PlaygroundPersistenceTest {
     }
     static class MutableClock extends Clock {
         private Instant instant=Instant.parse("2026-09-27T00:00:00Z");
-        void reset() { instant=Instant.parse("2026-09-27T00:00:00Z"); }
+        private boolean live;
+        void reset() { instant=Instant.parse("2026-09-27T00:00:00Z"); live=false; }
         void advance(long seconds) { instant=instant.plusSeconds(seconds); }
         @Override public ZoneId getZone() { return ZoneOffset.UTC; }
         @Override public Clock withZone(ZoneId zone) { return this; }
-        @Override public Instant instant() { return instant; }
+        @Override public Instant instant() { return live?Instant.now():instant; }
     }
     @BeforeAll static void schema() throws Exception {
         settings=json.readTree(Files.readString(Path.of(System.getenv("PLAYGROUND_TEST_CONFIG"))));
@@ -230,6 +232,370 @@ class PlaygroundPersistenceTest {
                 .put("publicRationale","Both ideas remain");
         accept.set("payload",json.createObjectNode().put("proposalId","plan-2"));
         service.submit(1,third.path("taskId").asLong(),submission(third,accept,UUID.randomUUID().toString()));
+    }
+    @Test void v6FoundingTermsAreNegotiatedAndSurviveSettlement() {
+        service=new PlaygroundService(store,context.getBean(AgentMapper.class),
+                context.getBean(UserMapper.class),json,true,true,false,true,clock);
+        long id=joinedV5Room("SHORT");
+        assertEquals("0.9",service.ownerActivity(1,id).path("ruleVersion").asText());
+        ObjectNode first=ready(1), opening=proposal(4,16);
+        ObjectNode openingPlan=(ObjectNode)opening.path("payload").path("proposal").path("plan");
+        openingPlan.set("venture",venture()); openingPlan.set("strategy",v5Strategy());
+        openingPlan.set("contributions",json.createArrayNode().add(json.createObjectNode()
+                .put("sourceAgentId",1).put("sourceFieldId","theme").put("placement","SPACE")
+                .put("label","Host concept").putNull("sourceEventId")));
+        businessError("INVALID_ACTION",()->service.submit(1,first.path("taskId").asLong(),
+                submission(first,opening,UUID.randomUUID().toString())));
+        openingPlan.set("foundingAgreement",founding(100,100,50));
+        service.submit(1,first.path("taskId").asLong(),submission(first,opening,UUID.randomUUID().toString()));
+
+        ObjectNode second=ready(2), counter=proposal(4,16);
+        counter.put("actionType","COUNTER_PLAN");
+        ObjectNode counterProposal=(ObjectNode)counter.path("payload").path("proposal");
+        counterProposal.put("proposalId","plan-2").put("parentProposalId","plan-1");
+        ObjectNode counterPlan=(ObjectNode)counterProposal.path("plan");
+        counterPlan.set("venture",venture()); counterPlan.set("strategy",v5Strategy());
+        counterPlan.set("foundingAgreement",founding(150,50,60));
+        counterPlan.set("contributions",json.createArrayNode()
+                .add(second.path("visibleState").path("proposal").path("plan").path("contributions").get(0))
+                .add(json.createObjectNode().put("sourceAgentId",2).put("sourceFieldId","theme")
+                        .put("placement","SERVICE").put("label","Guest service").putNull("sourceEventId")));
+        service.submit(2,second.path("taskId").asLong(),submission(second,counter,UUID.randomUUID().toString()));
+        ObjectNode third=ready(1);
+        ObjectNode accept=json.createObjectNode().put("actionType","ACCEPT_PLAN")
+                .put("publicRationale","I accept the revised funding, profit split, and roles.");
+        accept.set("payload",json.createObjectNode().put("proposalId","plan-2"));
+        service.submit(1,third.path("taskId").asLong(),submission(third,accept,UUID.randomUUID().toString()));
+        assertTrue(service.ownerEvents(1,id,0).stream().anyMatch(event ->
+                "FOUNDING_AGREEMENT".equals(event.path("kind").asText())
+                && event.path("facts").path("hostCapitalCoins").asInt()==150));
+        ObjectNode monthly=ready(2);
+        JsonNode window=monthly.path("visibleState").path("monthlyWindow");
+        assertFalse(window.path("conflictCode").asText().isBlank());
+        String guestPosition=window.path("optionCodes").get(2).asText();
+        String hostPosition=window.path("optionCodes").get(0).asText();
+        String selected=window.path("optionCodes").get(1).asText();
+        service.submit(2,monthly.path("taskId").asLong(),submission(monthly,
+                v6Position(window,guestPosition,"Guest independent position"),UUID.randomUUID().toString()));
+        ObjectNode reply=ready(1);
+        assertTrue(reply.path("visibleState").path("monthlyWindow").path("firstPosition").isNull());
+        assertFalse(reply.path("visibleState").path("events").toString().contains("Guest independent position"));
+        service.submit(1,reply.path("taskId").asLong(),submission(reply,
+                v6Position(reply.path("visibleState").path("monthlyWindow"),hostPosition,"Host independent position"),
+                UUID.randomUUID().toString()));
+        ObjectNode counterTask=ready(2);
+        assertEquals(guestPosition,counterTask.path("visibleState").path("monthlyWindow")
+                .path("firstPosition").asText());
+        assertEquals(hostPosition,counterTask.path("visibleState").path("monthlyWindow")
+                .path("secondPosition").asText());
+        service.submit(2,counterTask.path("taskId").asLong(),submission(counterTask,
+                v6Counter(counterTask.path("visibleState").path("monthlyWindow"),selected,
+                        hostPosition,guestPosition),UUID.randomUUID().toString()));
+        ObjectNode finalTask=ready(1);
+        JsonNode finalWindow=finalTask.path("visibleState").path("monthlyWindow");
+        assertEquals(selected,finalWindow.path("latestOffer").asText());
+        assertEquals(1,finalWindow.path("counterRounds").asInt());
+        assertTrue(finalTask.path("visibleState").path("events").toString()
+                .contains("I keep your caution and concede my original speed."));
+        assertTrue(finalTask.path("allowedActions").toString().contains("COUNTER_MONTHLY"));
+        service.submit(1,finalTask.path("taskId").asLong(),submission(finalTask,
+                v6Counter(finalWindow,hostPosition,selected,hostPosition),
+                UUID.randomUUID().toString()));
+        ObjectNode lastTask=ready(2);
+        assertEquals(2,lastTask.path("visibleState").path("monthlyWindow").path("counterRounds").asInt());
+        assertTrue(lastTask.path("visibleState").path("events").toString()
+                .contains("I keep your caution and concede my original speed."));
+        assertFalse(lastTask.path("allowedActions").toString().contains("COUNTER_MONTHLY"));
+        service.submit(2,lastTask.path("taskId").asLong(),submission(lastTask,
+                v6MonthlyDecision("ACCEPT_MONTHLY",lastTask.path("visibleState").path("monthlyWindow")),
+                UUID.randomUUID().toString()));
+        assertTrue(service.ownerEvents(1,id,0).stream().anyMatch(event ->
+                "V6_CONFLICT_RESOLUTION".equals(event.path("kind").asText())
+                && hostPosition.equals(event.path("facts").path("selectedOption").asText())
+                && "COUNTER_ACCEPTED".equals(event.path("facts").path("resolution").asText())));
+        JsonNode summary=service.ownerActivity(1,id).path("summary");
+        assertEquals("SETTLED",service.ownerActivity(1,id).path("status").asText());
+        assertEquals(summary.path("returnedCapitalMinor").asLong(),
+                summary.path("ownerOneReturnedMinor").asLong()+summary.path("ownerTwoReturnedMinor").asLong());
+        JsonNode published=context.getBean(PlaygroundShareService.class).ownerResultLink(1,id).path("result");
+        assertEquals(4,published.path("shareSchemaVersion").asInt());
+        assertEquals(150,published.path("foundingAgreement").path("hostCapitalCoins").asInt());
+        assertEquals(summary.path("ownerOneReturnedMinor").asLong(),
+                published.path("business").path("hostReturnedMinor").asLong());
+        assertEquals(hostPosition,published.path("business").path("months").get(1).path("tactic").asText());
+        assertEquals(guestPosition,published.path("business").path("months").get(1).path("firstPosition").asText());
+        assertEquals(hostPosition,published.path("business").path("months").get(1).path("secondPosition").asText());
+        assertEquals(selected,published.path("business").path("months").get(1).path("counter").asText());
+        assertEquals(hostPosition,published.path("business").path("months").get(1).path("replyCounter").asText());
+        assertEquals(2,published.path("business").path("months").get(1).path("counterRounds").asInt());
+        assertFalse(published.toString().contains("private:cats"));
+        assertFalse(published.toString().contains("private:dogs"));
+    }
+    @Test void v6AnnualRoomRequiresSeparateGrantAndNegotiatesEverySurvivingMonth() throws Exception {
+        verifyAnnualRoom(false,false);
+    }
+    @Test void v6OwnerLeavingDuringReviewPreservesSettledGame() throws Exception {
+        verifyAnnualRoom(true,false);
+    }
+    @Test void v6RepeatedReviewModelFailureKeepsSettlementAndLetsPartnerFinish() throws Exception {
+        verifyAnnualRoom(false,true);
+    }
+    @Test void v7AnnualRoomPersistsVersionedContextAndCausalIncident() throws Exception {
+        verifyAnnualRoom(false,false,true);
+    }
+    long verifyAnnualRoom(boolean leaveDuringReview,boolean failDuringReview) throws Exception {
+        return verifyAnnualRoom(leaveDuringReview,failDuringReview,false);
+    }
+    long verifyAnnualRoom(boolean leaveDuringReview,boolean failDuringReview,boolean storyVersion) throws Exception {
+        service=new PlaygroundService(store,context.getBean(AgentMapper.class),
+                context.getBean(UserMapper.class),json,true,true,false,true,clock);
+        org.springframework.test.util.ReflectionTestUtils.setField(service,"enrichedContext",true);
+        org.springframework.test.util.ReflectionTestUtils.setField(service,"storyEnabled",storyVersion);
+        enable(1); enable(2);
+        businessError("ANNUAL_PARTICIPATION_GRANT_REQUIRED",()->service.invite(1,
+                new Invitation(1L,2L,"FULL",v5Brief("cats"))));
+        for (long actor:List.of(1L,2L))
+            service.updateParticipation(actor,actor,new ParticipationUpdate(1,true,40,40,40));
+        long id=Long.parseLong(service.invite(1,new Invitation(1L,2L,"FULL",v5Brief("cats")))
+                .get("activityId").toString());
+        service.acceptInvitation(2,id,new InvitationAccept(v5Brief("dogs")));
+        service.join(1,id); service.join(2,id);
+        assertEquals(storyVersion?"1.1":"1.0",service.ownerActivity(1,id).path("ruleVersion").asText());
+        ObjectNode first=ready(1), opening=proposal(6,20);
+        ObjectNode openingPlan=(ObjectNode)opening.path("payload").path("proposal").path("plan");
+        openingPlan.set("venture",venture()); openingPlan.set("strategy",v5Strategy());
+        openingPlan.set("foundingAgreement",founding(100,100,50));
+        openingPlan.set("contributions",json.createArrayNode().add(json.createObjectNode()
+                .put("sourceAgentId",1).put("sourceFieldId","theme").put("placement","SPACE")
+                .put("label","Host concept").putNull("sourceEventId")));
+        service.submit(1,first.path("taskId").asLong(),submission(first,opening,UUID.randomUUID().toString()));
+        ObjectNode second=ready(2), counter=proposal(6,20);
+        counter.put("actionType","COUNTER_PLAN");
+        ObjectNode terms=(ObjectNode)counter.path("payload").path("proposal");
+        terms.put("proposalId","plan-2").put("parentProposalId","plan-1");
+        ObjectNode partnerPlan=(ObjectNode)terms.path("plan");
+        partnerPlan.set("venture",venture()); partnerPlan.set("strategy",v5Strategy());
+        partnerPlan.set("foundingAgreement",founding(150,50,60));
+        partnerPlan.set("contributions",json.createArrayNode()
+                .add(second.path("visibleState").path("proposal").path("plan").path("contributions").get(0))
+                .add(json.createObjectNode().put("sourceAgentId",2).put("sourceFieldId","theme")
+                        .put("placement","SERVICE").put("label","Guest service").putNull("sourceEventId")));
+        service.submit(2,second.path("taskId").asLong(),submission(second,counter,UUID.randomUUID().toString()));
+        ObjectNode third=ready(1), accept=json.createObjectNode().put("actionType","ACCEPT_PLAN")
+                .put("publicRationale","I accept the revised funding, profit split, and roles.");
+        accept.set("payload",json.createObjectNode().put("proposalId","plan-2"));
+        service.submit(1,third.path("taskId").asLong(),submission(third,accept,UUID.randomUUID().toString()));
+        if (storyVersion) {
+            // A restart with the new-room switch off must preserve the saved rules and task context.
+            service=new PlaygroundService(store,context.getBean(AgentMapper.class),
+                    context.getBean(UserMapper.class),json,true,true,false,false,clock);
+            assertEquals("1.1",service.ownerActivity(1,id).path("ruleVersion").asText());
+        }
+        int meetings=0;
+        while (service.ownerActivity(1,id).path("status").asText().equals("PLANNING")
+                && !service.ownerActivity(1,id).path("phase").asText().equals("PARTNER_REVIEW")) {
+            JsonNode persisted=json.readTree(store.activity(id).getStateJson()).path("v6AnnualWindow");
+            assertTrue(persisted.path("month").asInt()>=2 && persisted.path("month").asInt()<=12);
+            long leader=persisted.path("firstAgentId").asLong();
+            long partner=persisted.path("secondAgentId").asLong();
+            ObjectNode leaderTask=ready(leader);
+            JsonNode window=leaderTask.path("visibleState").path("monthlyWindow");
+            assertEquals(meetings+2,window.path("month").asInt());
+            assertTrue(window.path("responsibilities").isArray());
+            assertTrue(window.path("responsibilities").size()>=1);
+            assertEquals(json.valueToTree(leader==1?List.of("SUPPLY"):List.of("FULFILLMENT","CUSTOMERS")),
+                    window.path("responsibilities"));
+            assertTrue(window.path("optionEffects").isArray());
+            assertEquals(window.path("conflictCode").isNull()?0:3,window.path("optionEffects").size());
+            for (JsonNode effect:window.path("optionEffects")) {
+                assertEquals(8,effect.size());
+                assertTrue(effect.path("expenseCoins").isInt());
+                assertTrue(effect.path("rentDeltaCoins").isInt());
+            }
+            JsonNode trend=window.path("recentTrend");
+            assertEquals(Math.min(3,meetings+1),trend.size());
+            assertEquals(meetings+1,trend.get(trend.size()-1).path("month").asInt());
+            assertEquals(window.path("priorReport").path("closingCashMinor").asLong(),
+                    trend.get(trend.size()-1).path("closingCashMinor").asLong());
+            ObjectNode plan=json.createObjectNode().put("productionBand","STANDARD")
+                    .put("marketingAction",storyVersion && meetings==0?"COMMUNITY_EVENT":"NONE")
+                    .put("serviceFocus","FULFILLMENT");
+            if (storyVersion) {
+                assertTrue(window.has("cause"));
+                if (!window.path("cause").isNull()) {
+                    assertEquals("COMMUNITY_EVENT",window.path("cause").path("sourceValue").asText());
+                    assertEquals(window.path("month").asInt()-1,window.path("cause").path("sourceMonth").asInt());
+                    assertEquals("RUSH_BULK_ORDER",window.path("conflictCode").asText());
+                }
+            }
+            if (window.path("conflictCode").isNull()) plan.putNull("incidentResponse");
+            else plan.put("incidentResponse",window.path("optionCodes").get(0).asText());
+            service.submit(leader,leaderTask.path("taskId").asLong(),submission(leaderTask,
+                    annualPosition(window,plan),UUID.randomUUID().toString()));
+            ObjectNode partnerTask=ready(partner);
+            assertTrue(partnerTask.path("visibleState").path("monthlyWindow").path("firstPlan").isNull());
+            String sealedEventId=store.events(id,Math.max(0,store.activity(id).getNextSequence()-51))
+                    .stream().map(event->{
+                        try { return json.readTree(event); }
+                        catch (Exception error) { throw new IllegalStateException(error); }
+                    })
+                    .filter(event->"V6_ANNUAL_DECISION".equals(event.path("kind").asText())
+                            && window.path("triggerEventId").asText().equals(event.path("facts")
+                                    .path("action").path("payload").path("triggerEventId").asText()))
+                    .map(event->event.path("eventId").asText()).findFirst().orElseThrow();
+            assertFalse(partnerTask.path("visibleState").path("events").toString().contains(sealedEventId));
+            ObjectNode partnerChoice=plan.deepCopy();
+            if (meetings==0) partnerChoice.put("productionBand","CONSERVATIVE");
+            service.submit(partner,partnerTask.path("taskId").asLong(),submission(partnerTask,
+                    annualPosition(partnerTask.path("visibleState").path("monthlyWindow"),partnerChoice),
+                    UUID.randomUUID().toString()));
+            ObjectNode confirmation=ready(leader);
+            if (meetings==0) {
+                JsonNode disputed=confirmation.path("visibleState").path("monthlyWindow");
+                assertEquals("AWAIT_FIRST_REPLY",disputed.path("phase").asText());
+                ObjectNode reply=json.createObjectNode().put("actionType","REPLY_MONTHLY")
+                        .put("publicRationale","I defend standard capacity because demand was manageable.");
+                reply.set("payload",json.createObjectNode()
+                        .put("triggerEventId",disputed.path("triggerEventId").asText())
+                        .put("targetVersion",disputed.path("targetVersion").asText())
+                        .put("claimsRevision",false).put("focusField","productionBand")
+                        .put("reasonFocus","CASH").set("plan",plan));
+                service.submit(leader,confirmation.path("taskId").asLong(),submission(confirmation,
+                        reply,UUID.randomUUID().toString()));
+                confirmation=ready(partner);
+            } else assertEquals("AWAIT_CONFIRM",confirmation.path("visibleState").path("monthlyWindow")
+                    .path("phase").asText());
+            ObjectNode confirmationAction=json.createObjectNode().put("actionType","ACCEPT_MONTHLY")
+                    .put("publicRationale","I read the same plan and confirm our operating choice.");
+            confirmationAction.set("payload",json.createObjectNode()
+                    .put("triggerEventId",window.path("triggerEventId").asText())
+                    .put("targetVersion",confirmation.path("visibleState").path("monthlyWindow")
+                            .path("targetVersion").asText()).put("reasonFocus","CASH"));
+            service.submit(meetings==0?partner:leader,confirmation.path("taskId").asLong(),submission(confirmation,
+                    confirmationAction,UUID.randomUUID().toString()));
+            meetings++;
+            assertTrue(meetings<=11);
+        }
+        assertTrue(meetings>0 && meetings<=11);
+        JsonNode finalGame=service.ownerActivity(1,id).path("game");
+        int operated=finalGame.path("operatedMonths").asInt();
+        int failedOpening=finalGame.path("failedOpeningMonth").isNull()?0:
+                finalGame.path("failedOpeningMonth").asInt();
+        assertEquals(Math.min(11,operated+(failedOpening>0?1:0)-1),meetings);
+        assertEquals(meetings,jdbc.queryForObject("SELECT COUNT(*) FROM playground_events "
+                +"WHERE activity_id=? AND JSON_UNQUOTE(JSON_EXTRACT(event_json,'$.kind'))='V6_ANNUAL_RESOLUTION'",
+                Integer.class,id));
+        assertEquals("PARTNER_REVIEW",service.ownerActivity(1,id).path("phase").asText());
+        PlaygroundShareService shares=context.getBean(PlaygroundShareService.class);
+        businessError("GAME_NOT_FINISHED",()->shares.ownerResultLink(1,id));
+        if (leaveDuringReview) {
+            service.leave(1,id);
+            assertEquals("SETTLED",service.ownerActivity(1,id).path("status").asText());
+            JsonNode published=shares.ownerResultLink(1,id).path("result");
+            assertEquals("UNAVAILABLE",published.path("partnerReviews").get(0).path("status").asText());
+            assertEquals("UNAVAILABLE",published.path("partnerReviews").get(1).path("status").asText());
+            return id;
+        }
+        if (failDuringReview) {
+            ObjectNode firstReview=ready(1);
+            assertEquals("PARTNER_REVIEW",firstReview.path("phase").asText());
+            AttemptFailure failure=new AttemptFailure(firstReview.path("leaseToken").asText(),
+                    firstReview.path("permissionVersion").asLong(),firstReview.path("attemptId").asText(),"MODEL_OUTPUT_INVALID");
+            assertEquals("RETRY_PENDING",service.reportAttemptFailure(1,firstReview.path("taskId").asLong(),failure)
+                    .path("status").asText());
+            ObjectNode retry=ready(1);
+            AttemptFailure exhausted=new AttemptFailure(retry.path("leaseToken").asText(),
+                    retry.path("permissionVersion").asLong(),retry.path("attemptId").asText(),"MODEL_OUTPUT_INVALID");
+            assertEquals("PLANNING",service.reportAttemptFailure(1,retry.path("taskId").asLong(),exhausted)
+                    .path("status").asText());
+            assertEquals("PARTNER_REVIEW",service.ownerActivity(1,id).path("phase").asText());
+        }
+        for (long actor:failDuringReview?List.of(2L):List.of(1L,2L)) {
+            ObjectNode reviewTask=ready(actor);
+            assertEquals("PARTNER_REVIEW",reviewTask.path("phase").asText());
+            if (actor==2) assertFalse(reviewTask.path("visibleState").path("events").toString()
+                    .contains("My partner helped us make a specific operating choice together."));
+            JsonNode evidence=reviewTask.path("visibleState").path("partnerReview").path("partnerEvidence");
+            assertTrue(evidence.size()>0);
+            ObjectNode review=json.createObjectNode().put("actionType","REVIEW_PARTNER")
+                    .put("publicRationale","My partner helped us make a specific operating choice together.");
+            review.set("payload",json.createObjectNode()
+                    .put("partnerStrength","They responded to private:cats in a monthly proposal.")
+                    .put("friction","We disagreed about production risk.")
+                    .put("futureCollaboration","YES")
+                    .put("evidenceEventId",evidence.get(evidence.size()-1).path("eventId").asText()));
+            ObjectNode forged=review.deepCopy();
+            ((ObjectNode)forged.path("payload")).put("evidenceEventId","999:999");
+            businessError("REVIEW_EVIDENCE_REQUIRED",()->service.submit(actor,
+                    reviewTask.path("taskId").asLong(),
+                    submission(reviewTask,forged,UUID.randomUUID().toString())));
+            service.submit(actor,reviewTask.path("taskId").asLong(),
+                    submission(reviewTask,review,UUID.randomUUID().toString()));
+        }
+        assertEquals("SETTLED",service.ownerActivity(1,id).path("status").asText());
+        ObjectNode link=shares.ownerResultLink(1,id);
+        assertEquals(failDuringReview?1:2,jdbc.queryForObject("SELECT COUNT(*) FROM playground_events WHERE activity_id=? "
+                +"AND JSON_UNQUOTE(JSON_EXTRACT(event_json,'$.kind'))='PARTNER_REVIEW' "
+                +"AND JSON_EXTRACT(event_json,'$.virtualMonth')=?",Integer.class,id,operated));
+        JsonNode publicResult=link.path("result");
+        String sharePath=link.path("sharePath").asText();
+        String token=sharePath.substring(sharePath.indexOf("/shares/")+8,sharePath.indexOf("/landing"));
+        assertEquals(5,shares.publicResult(token).path("shareSchemaVersion").asInt());
+        assertEquals(2,shares.publicResult(token).path("partnerReviews").size());
+        assertEquals(5,publicResult.path("shareSchemaVersion").asInt());
+        assertEquals(2,publicResult.path("partnerReviews").size());
+        assertEquals(failDuringReview?"UNAVAILABLE":"RECORDED",
+                publicResult.path("partnerReviews").get(0).path("status").asText());
+        assertEquals("RECORDED",publicResult.path("partnerReviews").get(1).path("status").asText());
+        assertEquals(finalGame.path("operatedMonths").asInt(),
+                publicResult.path("business").path("months").size());
+        assertEquals("COUNTER_ACCEPTED",publicResult.path("business").path("months").get(1)
+                .path("resolution").asText());
+        assertEquals("CONSERVATIVE",publicResult.path("business").path("months").get(1)
+                .path("secondPlan").path("productionBand").asText());
+        assertEquals("STANDARD",publicResult.path("business").path("months").get(1)
+                .path("effectivePlan").path("productionBand").asText());
+        assertFalse(publicResult.toString().contains("private:cats"));
+        assertFalse(publicResult.toString().contains("private:dogs"));
+        return id;
+    }
+    ObjectNode annualPosition(JsonNode window,ObjectNode plan) {
+        ObjectNode action=json.createObjectNode().put("actionType","POSITION_MONTHLY")
+                .put("publicRationale","First annual position based on the prior month report.");
+        action.set("payload",json.createObjectNode()
+                .put("triggerEventId",window.path("triggerEventId").asText())
+                .put("targetVersion",window.path("targetVersion").asText())
+                .put("reasonFocus","CASH").set("plan",plan));
+        return action;
+    }
+    ObjectNode founding(int hostCapital,int guestCapital,int hostProfitPercent) {
+        return json.createObjectNode().put("hostCapitalCoins",hostCapital)
+                .put("guestCapitalCoins",guestCapital).put("hostProfitPercent",hostProfitPercent)
+                .put("serviceLead","GUEST").put("supplyLead","HOST")
+                .put("communityLead","GUEST");
+    }
+    ObjectNode v6Position(JsonNode window,String choice,String reason) {
+        ObjectNode action=json.createObjectNode().put("actionType","POSITION_MONTHLY")
+                .put("publicRationale",reason);
+        action.set("payload",json.createObjectNode()
+                .put("triggerEventId",window.path("triggerEventId").asText())
+                .put("planVersion",window.path("planVersion").asText())
+                .put("tacticCode",choice));
+        return action;
+    }
+    ObjectNode v6Counter(JsonNode window,String choice,String kept,String conceded) {
+        ObjectNode action=v6Position(window,choice,"I keep your caution and concede my original speed.");
+        action.put("actionType","COUNTER_MONTHLY");
+        ((ObjectNode)action.path("payload")).put("keptFromPartner",kept).put("concededOwnPoint",conceded);
+        return action;
+    }
+    ObjectNode v6MonthlyDecision(String type,JsonNode window) {
+        ObjectNode action=json.createObjectNode().put("actionType",type)
+                .put("publicRationale","I accept the concrete compromise.");
+        action.set("payload",json.createObjectNode()
+                .put("triggerEventId",window.path("triggerEventId").asText())
+                .put("planVersion",window.path("planVersion").asText()));
+        return action;
     }
     ObjectNode v5Decision(String type,JsonNode window,String choice) {
         ObjectNode action=json.createObjectNode().put("actionType",type).put("publicRationale","Our shop responds to this month");
@@ -917,6 +1283,7 @@ class PlaygroundPersistenceTest {
         @Bean com.ai.repo.jwt.JwtAuthenticationFilter adminJwtFilter(com.ai.repo.jwt.JwtProvider jwt,
                 com.ai.repo.service.AgentService agents) {
             var filter=new com.ai.repo.jwt.JwtAuthenticationFilter();
+            org.springframework.test.util.ReflectionTestUtils.setField(filter,"userMapper",context.getBean(UserMapper.class));
             org.springframework.test.util.ReflectionTestUtils.setField(filter,"jwtProvider",jwt);
             org.springframework.test.util.ReflectionTestUtils.setField(filter,"agentService",agents);
             return filter;
@@ -1077,6 +1444,8 @@ class PlaygroundPersistenceTest {
         boolean browserFixture="true".equals(System.getenv("PLAYGROUND_BROWSER_FIXTURE_TEST"));
         boolean v5Model="5".equals(System.getenv("PLAYGROUND_MODEL_TEST_CONTRACT_VERSION"));
         boolean v5FullModel=v5Model&&"FULL".equals(System.getenv("PLAYGROUND_MODEL_TEST_MODE"));
+        boolean annualModel=v5FullModel&&"true".equals(System.getenv("PLAYGROUND_MODEL_TEST_ANNUAL"));
+        clock.live=annualModel; // Real model calls must not outlive a frozen 90-second lease.
         org.springframework.test.util.ReflectionTestUtils.setField(jwt,"accessTokenExpiration",v5FullModel?1200000L:browserObserve||browserFixture||v5Model?600000L:60000L); jwt.validateSecret();
         httpJwt=jwt;
         List<String> browserPasswords=browserFixture
@@ -1116,6 +1485,7 @@ class PlaygroundPersistenceTest {
             definition.setFilter(proxy);
         } else {
             var filter=new com.ai.repo.jwt.JwtAuthenticationFilter();
+            org.springframework.test.util.ReflectionTestUtils.setField(filter,"userMapper",context.getBean(UserMapper.class));
             org.springframework.test.util.ReflectionTestUtils.setField(filter,"jwtProvider",jwt);
             org.springframework.test.util.ReflectionTestUtils.setField(filter,"agentService",databaseIdentities());
             definition.setFilterName("jwt");definition.setFilter(filter);
@@ -1139,6 +1509,13 @@ class PlaygroundPersistenceTest {
             input.set("keys",json.valueToTree(keys)); input.set("ownerTokens",json.valueToTree(tokens));
             if (browserFixture) input.set("ownerPasswords",json.valueToTree(browserPasswords));
             Files.writeString(config,json.writeValueAsString(input));Files.setPosixFilePermissions(config,java.nio.file.attribute.PosixFilePermissions.fromString("rw-------"));
+            if (browserFixture && annualModel) {
+                long annualId=verifyAnnualRoom(false,false,"true".equals(System.getenv("PLAYGROUND_STORY_TEST")));
+                input.put("realAccountShell",true).put("decisionSource","DETERMINISTIC_FIXTURE");
+                Files.writeString(config,json.writeValueAsString(input));
+                runBrowserObservation(directory,config,annualId,false);
+                return; // Deterministic decisions; no model call and no production login chain.
+            }
             if (browserFixture) {
                 long fixtureId=runBrowserEntry(directory,config);
                 JsonNode browserTokens=json.readTree(Files.readString(directory.resolve("browser-login-tokens.json")));
@@ -1234,7 +1611,11 @@ class PlaygroundPersistenceTest {
                 if (recoveryMode) assertTrue(Set.of("PLANNING","SETTLED","INTERRUPTED").contains(owner.path("status").asText()));
                 else if (safetyMode) assertTrue(Set.of("SETTLED","INTERRUPTED").contains(owner.path("status").asText()));
                 else assertEquals("SETTLED",owner.path("status").asText());
-                if (owner.path("status").asText().equals("SETTLED")) assertEquals(v5FullModel?12:2,owner.path("summary").path("operatedMonths").asInt());
+                if (owner.path("status").asText().equals("SETTLED")) {
+                    int months=owner.path("summary").path("operatedMonths").asInt();
+                    if (annualModel) assertTrue(months>=1 && months<=12);
+                    else assertEquals(v5FullModel?12:2,months);
+                }
                 if (safetyMode && !closingScenario && owner.path("status").asText().equals("INTERRUPTED")) {
                     assertFalse(owner.has("summary"));
                     long failures=service.ownerEvents(1,id,0).stream().filter(e->e.path("kind").asText().equals("AGENT_FAILURE")).count();
@@ -1353,7 +1734,8 @@ class PlaygroundPersistenceTest {
     }
     int maxModelCalls() {
         return switch (System.getenv().getOrDefault("PLAYGROUND_MODEL_TEST_CONTRACT_VERSION","2")) {
-            case "5" -> "FULL".equals(System.getenv("PLAYGROUND_MODEL_TEST_MODE")) ? 18 : 9;
+            case "5" -> "true".equals(System.getenv("PLAYGROUND_MODEL_TEST_ANNUAL")) ? 100
+                    : "FULL".equals(System.getenv("PLAYGROUND_MODEL_TEST_MODE")) ? 18 : 9;
             case "4" -> 8;
             default -> 4;
         };
@@ -1389,13 +1771,16 @@ class PlaygroundPersistenceTest {
         Path frontend=Path.of(System.getenv("PLAYGROUND_FE_ROOT"));
         Path script=frontend.resolve("tests/playground/authenticated-observe.mjs");
         assertTrue(Files.isRegularFile(script),"Browser observation script missing");
-        String browserVersion="5".equals(System.getenv("PLAYGROUND_MODEL_TEST_CONTRACT_VERSION")) ? "v5" : "v4";
+        boolean annual="5".equals(System.getenv("PLAYGROUND_MODEL_TEST_CONTRACT_VERSION"))
+                && "true".equals(System.getenv("PLAYGROUND_MODEL_TEST_ANNUAL"));
+        String browserVersion=annual ? "v6" : "5".equals(System.getenv("PLAYGROUND_MODEL_TEST_CONTRACT_VERSION")) ? "v5" : "v4";
         var browserBuilder=new ProcessBuilder("node",script.toString(),config.toString(),Long.toString(id));
         browserBuilder.directory(frontend.toFile());
         browserBuilder.environment().put("VITE_PLAYGROUND_ENABLED","true");
         browserBuilder.environment().put("VITE_PLAYGROUND_NPC_V4","true");
         if ("5".equals(System.getenv("PLAYGROUND_MODEL_TEST_CONTRACT_VERSION")))
             browserBuilder.environment().put("VITE_PLAYGROUND_V5","true");
+        browserBuilder.environment().put("VITE_PLAYGROUND_V6",Boolean.toString(annual));
         browserBuilder.environment().put("VITE_TEST_MODE","false");
         browserBuilder.environment().put("PLAYGROUND_MODEL_TEST_CLOSING_SCENARIO",Boolean.toString(closing));
         browserBuilder.redirectErrorStream(true);
@@ -1411,6 +1796,15 @@ class PlaygroundPersistenceTest {
         assertEquals(0,browserProcess.exitValue(),"Authenticated browser observation failed; inspect private browser.log");
         JsonNode browserEvidence=json.readTree(Files.readString(directory.resolve("browser-evidence.json")));
         assertEquals(2,browserEvidence.path("owners").size());
+        if (annual) {
+            for (JsonNode owner:browserEvidence.path("owners")) {
+                assertEquals(11,owner.path("monthlyTurns").asInt());
+                assertEquals(11,owner.path("resolvedMonthlyTurns").asInt());
+                assertEquals(2,owner.path("recordedPartnerReviews").asInt());
+                assertTrue(owner.path("publicEnding").path("anonymous").asBoolean());
+                assertEquals(12,owner.path("publicEnding").path("months").asInt());
+            }
+        }
         if (closing) {
             var events=service.ownerEvents(1,id,0);
             String rejection=events.stream().filter(e->e.path("kind").asText().equals("DECISION"))
@@ -1430,8 +1824,12 @@ class PlaygroundPersistenceTest {
         }
         Files.writeString(Path.of("target/playground-"+browserVersion+"-browser-evidence.json"),
                 json.writerWithDefaultPrettyPrinter().writeValueAsString(browserEvidence));
-        for (int actor=1;actor<=2;actor++) Files.copy(directory.resolve("browser-owner-"+actor+".png"),
-                Path.of("target/playground-"+browserVersion+"-browser-owner-"+actor+".png"),java.nio.file.StandardCopyOption.REPLACE_EXISTING);
+        for (int actor=1;actor<=2;actor++) {
+            Files.copy(directory.resolve("browser-owner-"+actor+".png"),
+                    Path.of("target/playground-"+browserVersion+"-browser-owner-"+actor+".png"),java.nio.file.StandardCopyOption.REPLACE_EXISTING);
+            if (annual) Files.copy(directory.resolve("browser-share-"+actor+".png"),
+                    Path.of("target/playground-v6-browser-share-"+actor+".png"),java.nio.file.StandardCopyOption.REPLACE_EXISTING);
+        }
     }
     long runBrowserDirected(Path directory,Path config) throws Exception {
         Path frontend=Path.of(System.getenv("PLAYGROUND_FE_ROOT"));
