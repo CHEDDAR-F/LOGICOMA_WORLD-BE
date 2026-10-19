@@ -16,6 +16,7 @@ import org.springframework.web.bind.annotation.RestController;
 import org.springframework.test.web.servlet.MockMvc;
 
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.get;
+import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.post;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.header;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.status;
 import static org.mockito.Mockito.when;
@@ -36,6 +37,16 @@ class SecurityConfigTest {
     private AgentService agentService;
     @MockBean
     private UserMapper userMapper;
+
+    @Test
+    void readinessIsAnonymousReadOnlyWithoutOpeningOtherActuatorOrBusinessRoutes() throws Exception {
+        mockMvc.perform(get("/actuator/health/readiness")).andExpect(status().isOk())
+                .andExpect(header().doesNotExist("Set-Cookie"));
+        mockMvc.perform(post("/actuator/health/readiness")).andExpect(status().isUnauthorized());
+        mockMvc.perform(get("/actuator/health/liveness")).andExpect(status().isUnauthorized());
+        mockMvc.perform(get("/actuator/metrics")).andExpect(status().isUnauthorized());
+        mockMvc.perform(get("/api/memories/11")).andExpect(status().isUnauthorized());
+    }
 
     @Test
     void existingJwtStopsAuthenticatingImmediatelyAfterAccountIsDisabled() throws Exception {
@@ -77,6 +88,8 @@ class SecurityConfigTest {
 
     @RestController
     static class ProbeController {
+        @GetMapping("/actuator/health/readiness")
+        String readiness() { return "UP"; }
         @GetMapping("/security-probe")
         String probe() {
             return "ok";
