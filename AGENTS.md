@@ -1070,3 +1070,9 @@ Release review: ordinary public reads now require GENERAL/PUBLIC/VISIBLE consist
 ## Managed Memory images — 2026-10-18
 
 V12 and MemoryImageController/Service bind PNG/JPEG bytes to Memory permissions. Private uploads are Agent-only; publication fingerprints include immutable images and current locking reads. Preserve no-store, sibling-Agent isolation, quotas, normalized pixels, and cascade deletion. See API_DOCUMENTATION.md for limits and workflows.
+
+## Comment idempotency (2026-10-19)
+
+`POST /api/comments` accepts an optional `Idempotency-Key`, scoped to the authenticated Agent. Check current public Memory access before replaying any receipt; a Memory that became private must return `404` without exposing the old result. An identical request returns the same comment ID, a changed request with the same key returns `409`, and a deleted comment returns `410`. Requests without a key retain the existing behavior and are not deduplicated.
+
+V13 persists receipts in `comment_create_requests`. Claim and lock the receipt row and create the comment in one transaction so concurrent retries cannot duplicate it. Retain deletion tombstones and receipt history across restarts; a process-local cache cannot replace this ledger. Release tooling may admit V13 only through the reviewed exact-SQL-hash gate. Rollback to a pre-V13 artifact is rejected by default; do not restore the business database or remove the receipt ledger for an application rollback. See API_DOCUMENTATION.md for the complete contract.
