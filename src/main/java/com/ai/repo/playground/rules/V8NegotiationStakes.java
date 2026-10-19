@@ -5,7 +5,7 @@ package com.ai.repo.playground.rules;
 public final class V8NegotiationStakes {
     private final V6ConflictRules conflicts = new V6ConflictRules();
     private final V5ShopRules business = new V5ShopRules();
-    public record Outcome(V5ShopRules.MonthResult result, V6ConflictRules.StoryState story,MonthlyShopRules.CapacityDelivery delivery) {}
+    public record Outcome(V5ShopRules.MonthResult result, V6ConflictRules.StoryState story,MonthlyShopRules.CapacityDelivery delivery,V10CapacityPressure.Evidence pressure) {}
     public record Accounts(long cashMinor, long profitMinor, long inventoryMinor, int soldUnits,
                            MonthlyShopRules.Ending ending, boolean opened) {}
     public record Impact(String basis, Accounts actual, Accounts signedFallback,
@@ -36,6 +36,12 @@ public final class V8NegotiationStakes {
     public Outcome advance(MonthlyShopRules.State before, V5ShopRules.Strategy signed,
             V5ShopRules.Signal signal, V5FranchiseOffer franchise, V6ConflictRules.StoryState story,
             V6ConflictRules.Kind conflict, V6MonthlyPlan plan,MonthlyShopRules.CapacityReservation reservation,boolean boundedCapacity) {
+        return advance(before,signed,signal,franchise,story,conflict,plan,reservation,boundedCapacity,false);
+    }
+    public Outcome advance(MonthlyShopRules.State before,V5ShopRules.Strategy signed,
+            V5ShopRules.Signal signal,V5FranchiseOffer franchise,V6ConflictRules.StoryState story,
+            V6ConflictRules.Kind conflict,V6MonthlyPlan plan,MonthlyShopRules.CapacityReservation reservation,
+            boolean boundedCapacity,boolean pressure) {
         if (plan != null) plan.validateFor(conflict);
         MonthlyShopRules.TradingAdjustment adjustment;
         V6ConflictRules.StoryState next;
@@ -66,10 +72,11 @@ public final class V8NegotiationStakes {
         }
         // Option economics come from the card, never its list position. In 1.0/1.1
         // the second/third option also applied generic promotion/pivot fees and prices.
-        var trade = boundedCapacity?business.advanceWithCapacity(before, plan == null ? signed : plan.strategy(signed), signal,
+        var trade = pressure?business.advanceWithPressure(before,V10CapacityPressure.strategy(plan,signed),signal,
+                V5ShopRules.Response.KEEP_IDENTITY,franchise,true,adjustment,reservation):boundedCapacity?business.advanceWithCapacity(before, plan == null ? signed : plan.strategy(signed), signal,
                 V5ShopRules.Response.KEEP_IDENTITY, franchise, true, adjustment,reservation):new V5ShopRules.CapacityMonth(business.advance(before,plan==null?signed:plan.strategy(signed),signal,
                 V5ShopRules.Response.KEEP_IDENTITY,franchise,true,adjustment),null);
-        return new Outcome(trade.month(), next,trade.delivery());
+        return new Outcome(trade.month(), next,trade.delivery(),trade.pressure());
     }
 
     public Accounts accounts(MonthlyShopRules.State before, V5ShopRules.MonthResult result) {
@@ -92,9 +99,15 @@ public final class V8NegotiationStakes {
             V5ShopRules.Signal signal, V5FranchiseOffer franchise, V6ConflictRules.StoryState story,
             V6ConflictRules.Kind conflict, V6MonthlyPlan first, V6MonthlyPlan second,
             V5ShopRules.MonthResult actual,MonthlyShopRules.CapacityReservation reservation,boolean boundedCapacity) {
+        return impact(before,signed,signal,franchise,story,conflict,first,second,actual,reservation,boundedCapacity,false);
+    }
+    public Impact impact(MonthlyShopRules.State before,V5ShopRules.Strategy signed,V5ShopRules.Signal signal,
+            V5FranchiseOffer franchise,V6ConflictRules.StoryState story,V6ConflictRules.Kind conflict,
+            V6MonthlyPlan first,V6MonthlyPlan second,V5ShopRules.MonthResult actual,
+            MonthlyShopRules.CapacityReservation reservation,boolean boundedCapacity,boolean pressure) {
         return new Impact("SAME_MONTH_SAME_MARKET", accounts(before, actual),
-                accounts(before, advance(before, signed, signal, franchise, story, conflict, null,reservation,boundedCapacity).result()),
-                first == null ? null : accounts(before, advance(before, signed, signal, franchise, story, conflict, first,reservation,boundedCapacity).result()),
-                second == null ? null : accounts(before, advance(before, signed, signal, franchise, story, conflict, second,reservation,boundedCapacity).result()));
+                accounts(before, advance(before, signed, signal, franchise, story, conflict, null,reservation,boundedCapacity,pressure).result()),
+                first == null ? null : accounts(before, advance(before, signed, signal, franchise, story, conflict, first,reservation,boundedCapacity,pressure).result()),
+                second == null ? null : accounts(before, advance(before, signed, signal, franchise, story, conflict, second,reservation,boundedCapacity,pressure).result()));
     }
 }

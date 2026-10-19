@@ -146,9 +146,29 @@ public class PlaygroundShareService {
         }
         return true;
     }
+    private boolean safePressure(JsonNode value) {
+        if(!value.isObject() || value.size()!=9 || !onlyFields(value,Set.of("fromMonth","throughMonth","baseWalkInDemand","normalCapacity",
+                "restrictedMonth","restrictedCapacity","expandedProduction","comparisonBasis","reports"))
+                || value.path("fromMonth").asInt()!=4 || value.path("throughMonth").asInt()!=6
+                || !value.path("comparisonBasis").asText().equals("SAME_MONTH_SAME_MARKET_WITHOUT_ORDER")
+                || !value.path("reports").isArray() || value.path("reports").size()>3) return false;
+        for(String key:List.of("fromMonth","throughMonth","baseWalkInDemand","normalCapacity","restrictedMonth","restrictedCapacity","expandedProduction"))
+            if(!value.path(key).isIntegralNumber() || value.path(key).asInt()<0 || value.path(key).asInt()>12) return false;
+        for(JsonNode r:value.path("reports")) {
+            if(!r.isObject() || r.size()!=9 || !onlyFields(r,Set.of("evidence","trustBefore","trustAfter","echoMonthsAfter","penaltyMinor","bonusMinor",
+                    "sameMonthWithoutOrderWalkInSold","sameMonthWithoutOrderProfitMinor","actualProfitMinor"))) return false;
+            JsonNode e=r.path("evidence");
+            if(!e.isObject() || e.size()!=12 || !onlyFields(e,Set.of("month","totalCapacity","producedUnits","availableUnits","walkInDemand","orderUnits",
+                    "orderDelivered","walkInCapacity","walkInSold","unservedWalkIns","capacityDemandShortfall","stockShortfall"))) return false;
+            for(JsonNode n:e) if(!n.isIntegralNumber() || n.asLong()<0 || n.asLong()>10000) return false;
+            var fields=r.fields();while(fields.hasNext()) { var f=fields.next(); if(!f.getKey().equals("evidence")
+                    && (!f.getValue().isIntegralNumber() || Math.abs(f.getValue().asLong())>1000000)) return false; }
+        }
+        return true;
+    }
     private boolean safeSnapshot(JsonNode payload) {
         int schema=payload.path("shareSchemaVersion").asInt();
-        if (!payload.isObject() || !Set.of(3,4,5,6,7).contains(schema) ||
+        if (!payload.isObject() || !Set.of(3,4,5,6,7,8).contains(schema) ||
                 !"ODD_SHOP".equals(payload.path("gameKey").asText())) return false;
         String outcome=payload.path("outcome").asText();
         if (!Set.of("OPERATED","UNOPENED").contains(outcome) ||
@@ -208,8 +228,8 @@ public class PlaygroundShareService {
                         .contains(move.path("move").asText()))) return false;
         if (outcome.equals("UNOPENED")) return !payload.has("business");
         JsonNode business=payload.path("business");
-        if (!business.isObject() || !onlyFields(business,schema==7
-                ?Set.of("ending","operatedMonths","netProfitMinor","months","franchise","returnedCapitalMinor","hostReturnedMinor","guestReturnedMinor","capacityOrder","orderDecision")
+        if (!business.isObject() || !onlyFields(business,schema>=7
+                ?Set.of("ending","operatedMonths","netProfitMinor","months","franchise","returnedCapitalMinor","hostReturnedMinor","guestReturnedMinor","capacityOrder","orderDecision","capacityPressure")
                 :schema>=4?Set.of("ending","operatedMonths","netProfitMinor","months","franchise","returnedCapitalMinor","hostReturnedMinor","guestReturnedMinor")
                 :Set.of("ending","operatedMonths","netProfitMinor","months","franchise")) ||
                 !business.path("months").isArray()) return false;
@@ -220,12 +240,13 @@ public class PlaygroundShareService {
                     !=business.path("returnedCapitalMinor").asLong())) return false;
         if(business.has("orderDecision")) {
             JsonNode decision=business.path("orderDecision");
-            if(schema!=7 || !decision.isObject() || !onlyFields(decision,Set.of("resolution","choice","firstPlan","secondPlan","firstReply","secondReply"))
+            if(schema<7 || !decision.isObject() || !onlyFields(decision,Set.of("resolution","choice","firstPlan","secondPlan","firstReply","secondReply"))
                     || !Set.of("CONFIRMED_MATCH","COUNTER_ACCEPTED","DECLINED","RETRACTED","DEADLINE_FALLBACK","BUDGET_FALLBACK","MODEL_FAILURE_FALLBACK").contains(decision.path("resolution").asText())) return false;
             for(String key:List.of("choice","firstPlan","secondPlan","firstReply","secondReply"))
                 if(!decision.path(key).isNull() && !Set.of("SMALL","LARGE","DECLINE").contains(decision.path(key).asText())) return false;
         }
-        if(business.has("capacityOrder") && (schema!=7 || !safeCapacityOrder(business.path("capacityOrder")))) return false;
+        if(business.has("capacityPressure") && (schema!=8 || !safePressure(business.path("capacityPressure")))) return false;
+        if(business.has("capacityOrder") && (schema<7 || !safeCapacityOrder(business.path("capacityOrder")))) return false;
         if (business.has("franchise")) {
             JsonNode franchise=business.path("franchise");
             if (!franchise.isObject() || !onlyFields(franchise,Set.of("month","resolution","supportOutcome"))
@@ -389,9 +410,9 @@ public class PlaygroundShareService {
                 409,"ENDING_NOT_SHAREABLE");
         JsonNode plan=proposal.path("plan");
         List<String> privateText=privateTerms(activity);
-        boolean annual=Set.of("1.0","1.1","1.2","1.3").contains(view.path("ruleVersion").asText());
+        boolean annual=Set.of("1.0","1.1","1.2","1.3","1.4").contains(view.path("ruleVersion").asText());
         boolean v6=annual || view.path("ruleVersion").asText().equals("0.9");
-        ObjectNode result=json.createObjectNode().put("shareSchemaVersion",view.path("ruleVersion").asText().equals("1.3")?7:view.path("ruleVersion").asText().equals("1.2")?6:annual?5:v6?4:3).put("gameKey","ODD_SHOP")
+        ObjectNode result=json.createObjectNode().put("shareSchemaVersion",view.path("ruleVersion").asText().equals("1.4")?8:view.path("ruleVersion").asText().equals("1.3")?7:view.path("ruleVersion").asText().equals("1.2")?6:annual?5:v6?4:3).put("gameKey","ODD_SHOP")
                 .put("outcome",status.equals("SETTLED")?"OPERATED":"UNOPENED")
                 .put("horizonMonths",view.path("horizonMonths").asInt());
         if (v6 && status.equals("SETTLED")) {
@@ -454,9 +475,11 @@ public class PlaygroundShareService {
             JsonNode summary=view.path("summary");
             require(summary.isObject(),409,"ENDING_NOT_SHAREABLE");
             ObjectNode business=result.putObject("business");
-            if(result.path("shareSchemaVersion").asInt()==7 && view.path("capacityOrder").isObject())
+            if(result.path("shareSchemaVersion").asInt()==8 && view.path("capacityPressure").isObject())
+                business.set("capacityPressure",view.path("capacityPressure").deepCopy());
+            if(result.path("shareSchemaVersion").asInt()>=7 && view.path("capacityOrder").isObject())
                 business.set("capacityOrder",view.path("capacityOrder").deepCopy());
-            if(result.path("shareSchemaVersion").asInt()==7)
+            if(result.path("shareSchemaVersion").asInt()>=7)
                 for(JsonNode e:events) if(e.path("kind").asText().equals("CAPACITY_ORDER_RESOLUTION")) {
                     ObjectNode decision=business.putObject("orderDecision");
                     for(String key:List.of("resolution","choice","firstPlan","secondPlan","firstReply","secondReply"))

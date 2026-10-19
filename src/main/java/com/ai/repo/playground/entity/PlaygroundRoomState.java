@@ -20,6 +20,7 @@ import lombok.Data;
 /** Internal persistence only. Never serialize this object into an HTTP response. */
 @Data
 public class PlaygroundRoomState {
+    private java.util.List<com.ai.repo.playground.rules.V10CapacityPressure.Report> capacityPressureReports = new java.util.ArrayList<>();
     private boolean randomMatched;
     private int contractVersion = 2;
     private String ruleVersion = MonthlyShopRules.RULE_VERSION;

@@ -42,6 +42,7 @@ import com.ai.repo.playground.rules.V6MonthlyPlan;
 import com.ai.repo.playground.rules.V7StoryRules;
 import com.ai.repo.playground.rules.V8NegotiationStakes;
 import com.ai.repo.playground.rules.V9CapacityOrder;
+import com.ai.repo.playground.rules.V10CapacityPressure;
 import com.ai.repo.playground.rules.V9OrderWindow;
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
@@ -66,6 +67,8 @@ public class PlaygroundService {
     private boolean stakesEnabled;
     @Value("${playground.orders-enabled:false}")
     private boolean ordersEnabled;
+    @Value("${playground.capacity-pressure-enabled:false}")
+    private boolean capacityPressureEnabled;
     private final Clock clock;
     private final MonthlyShopRules rules = new MonthlyShopRules();
     private final GameRegistry gameModules = OddShopModule.registry();
@@ -144,7 +147,7 @@ public class PlaygroundService {
         PlaygroundRoomState state = new PlaygroundRoomState(); state.setContractVersion(contractVersionFor(request.ownerBrief()));
         if (state.getContractVersion()==4) state.setRuleVersion("0.5");
         if (state.getContractVersion()==5) state.setRuleVersion(v6Enabled
-                ?(activity.getHorizonMonths()==12?(ordersEnabled?"1.3":stakesEnabled?"1.2":storyEnabled?"1.1":"1.0"):"0.9"):"0.8");
+                ?(activity.getHorizonMonths()==12?(ordersEnabled?(capacityPressureEnabled?"1.4":"1.3"):stakesEnabled?"1.2":storyEnabled?"1.1":"1.0"):"0.9"):"0.8");
         if (isV6(state)) state.setV6Story(V6ConflictRules.StoryState.initial());
         state.getOwnerBriefs().put(request.agentId(),request.ownerBrief());
         state.setGame(shopModule(state).initialize(new OddShopModule.Configuration(activity.getHorizonMonths(),
@@ -189,7 +192,7 @@ public class PlaygroundService {
             }
             activity.setExpiresAt(state.isRandomMatched() ? now().plusHours(2) : min(activity.getExpiresAt(),now().plusHours(2)));
             activity.setStatus("PLANNING");
-            if (franchiseEnabled && state.getContractVersion()==5 && Set.of("0.8","0.9","1.0","1.1","1.2","1.3").contains(state.getRuleVersion())
+            if (franchiseEnabled && state.getContractVersion()==5 && Set.of("0.8","0.9","1.0","1.1","1.2","1.3","1.4").contains(state.getRuleVersion())
                     && activity.getHorizonMonths()==12) {
                 V5FranchiseOffer offer=V5FranchiseOffer.draw("franchise:"+activity.getId(),1,random);
                 state.setFranchiseOffer(offer);
@@ -458,7 +461,8 @@ public class PlaygroundService {
                 .put("canAcceptInvitation",activity.getStatus().equals("INVITED") && agents.selectById(activity.getGuestAgentId()).getUserId().equals(userId));
         result.set("ownerBrief",json.valueToTree(state.getOwnerBriefs().get(own)));
         result.set("game",json.valueToTree(state.getGame()));
-        if(state.getRuleVersion().equals("1.3")) result.set("capacityOrder",json.valueToTree(state.getCapacityOrder()));
+        if(Set.of("1.3","1.4").contains(state.getRuleVersion())) result.set("capacityOrder",json.valueToTree(state.getCapacityOrder()));
+        if(state.getRuleVersion().equals("1.4")) result.set("capacityPressure",json.valueToTree(V10CapacityPressure.forecast(state.getCapacityPressureReports())));
         if (activity.getStatus().equals("SETTLED")) {
             result.set("summary",json.valueToTree(summaryFor(state)));
             if (isAnnual(state)) result.set("partnerReviews",json.valueToTree(state.getPartnerReviews()));
@@ -750,7 +754,7 @@ public class PlaygroundService {
     }
     private void resumePreopenAfterFallback(Activity activity,PlaygroundRoomState state) {
         if (!activity.getStatus().equals("PLANNING") || state.getContractVersion()!=5
-                || !Set.of("0.8","0.9","1.0","1.1","1.2","1.3").contains(state.getRuleVersion()) || state.getGame().operatedMonths()!=0
+                || !Set.of("0.8","0.9","1.0","1.1","1.2","1.3","1.4").contains(state.getRuleVersion()) || state.getGame().operatedMonths()!=0
                 || state.getFranchiseWindow()==null || openFranchiseWindow(state)
                 || state.getProposal()!=null) return;
         state.getWindowDecisions().clear();
@@ -921,7 +925,7 @@ public class PlaygroundService {
             settleV5(activity,state); return;
         }
         int month=state.getGame().operatedMonths()+1;
-        if (state.getRuleVersion().equals("1.3") && month==3 && state.getOrderWindow()==null) {
+        if (Set.of("1.3","1.4").contains(state.getRuleVersion()) && month==3 && state.getOrderWindow()==null) {
             long first=previousActor==activity.getHostAgentId()?activity.getGuestAgentId():activity.getHostAgentId();
             state.setOrderWindow(V9OrderWindow.open(activity.getId()+":"+activity.getNextSequence(),3,
                     first,previousActor,min(now().plusMinutes(15),activity.getExpiresAt()).toInstant(ZoneOffset.UTC)));
@@ -1098,10 +1102,10 @@ public class PlaygroundService {
                 MonthlyShopRules.TradingAdjustment preview=window.conflict()==null
                         ?v6Rules.advanceEcho(state.getV6Story()).adjustment()
                         :v6Rules.resolve(window.conflict(),plan.incidentResponse(),state.getV6Story()).immediate();
-                if (Set.of("1.2","1.3").contains(state.getRuleVersion()))
+                if (Set.of("1.2","1.3","1.4").contains(state.getRuleVersion()))
                     new V8NegotiationStakes().advance(state.getGame(),v5Strategy(state),state.getV5Signal(),
                             signedFranchise(state,window.month()),state.getV6Story(),window.conflict(),plan,
-                            V9CapacityOrder.reservation(state.getCapacityOrder(),window.month()),state.getRuleVersion().equals("1.3"));
+                            V9CapacityOrder.reservation(state.getCapacityOrder(),window.month()),Set.of("1.3","1.4").contains(state.getRuleVersion()),state.getRuleVersion().equals("1.4"));
                 else shopModule(state).advance(state.getGame(),plan.strategy(v5Strategy(state)),state.getV5Signal(),
                         response,signedFranchise(state,window.month()),true,preview);
                 if (type.equals("REPLY_MONTHLY")) {
@@ -1199,7 +1203,7 @@ public class PlaygroundService {
     private void settleAnnualMonth(Activity activity,PlaygroundRoomState state) {
         V6AnnualWindow window=state.getV6AnnualWindow();
         V6MonthlyPlan plan=window.effectivePlan();
-        V5ShopRules.Response response=Set.of("1.2","1.3").contains(state.getRuleVersion()) || plan==null || window.conflict()==null
+        V5ShopRules.Response response=Set.of("1.2","1.3","1.4").contains(state.getRuleVersion()) || plan==null || window.conflict()==null
                 ?V5ShopRules.Response.KEEP_IDENTITY
                 :v6Response(window.conflict(),plan.incidentResponse());
         MonthlyShopRules.State before=state.getGame();
@@ -1214,11 +1218,11 @@ public class PlaygroundService {
         facts.put("firstPlan",window.firstPlan()); facts.put("secondPlan",window.secondPlan());
         facts.put("firstReply",window.firstReply()); facts.put("secondReply",window.secondReply());
         facts.put("marketingSpentMinor",result.marketingSpentMinor());
-        if (Set.of("1.2","1.3").contains(state.getRuleVersion())) {
+        if (Set.of("1.2","1.3","1.4").contains(state.getRuleVersion())) {
             facts.put("incidentUnresolved",window.conflict()!=null && plan==null);
             facts.put("decisionImpact",new V8NegotiationStakes().impact(before,v5Strategy(state),
                     state.getV5Signal(),signedFranchise(state,window.month()),storyBefore,
-                    window.conflict(),window.firstPlan(),window.secondPlan(),result,reservation,state.getRuleVersion().equals("1.3")));
+                    window.conflict(),window.firstPlan(),window.secondPlan(),result,reservation,Set.of("1.3","1.4").contains(state.getRuleVersion())));
         }
         eventAtMonth(activity,"V6_ANNUAL_RESOLUTION","SYSTEM",null,"EXECUTED",facts,window.month());
         continueAnnual(activity,state,window.firstAgentId());
@@ -1261,14 +1265,16 @@ public class PlaygroundService {
                 && ((state.getV6Window()!=null && state.getV6Window().month()==before.operatedMonths()+1)
                     || (state.getV5Window()!=null && state.getV5Window().month()==before.operatedMonths()+1)
                     || (state.getV6AnnualWindow()!=null && state.getV6AnnualWindow().month()==before.operatedMonths()+1));
+        V6ConflictRules.Kind pressureConflictBefore=currentConflict?state.getV6Conflict():null;
+        V6ConflictRules.StoryState pressureStoryBefore=state.getV6Story();
         V8NegotiationStakes.Outcome stakesOutcome=null;
-        if (Set.of("1.2","1.3").contains(state.getRuleVersion())) {
+        if (Set.of("1.2","1.3","1.4").contains(state.getRuleVersion())) {
             V6AnnualWindow window=state.getV6AnnualWindow();
             V6MonthlyPlan plan=window!=null && window.month()==before.operatedMonths()+1
                     ?window.effectivePlan():null;
             stakesOutcome=new V8NegotiationStakes().advance(before,v5Strategy(state),signal,signed,
                     state.getV6Story(),currentConflict?state.getV6Conflict():null,plan,
-                    V9CapacityOrder.reservation(state.getCapacityOrder(),before.operatedMonths()+1),state.getRuleVersion().equals("1.3"));
+                    V9CapacityOrder.reservation(state.getCapacityOrder(),before.operatedMonths()+1),Set.of("1.3","1.4").contains(state.getRuleVersion()),state.getRuleVersion().equals("1.4"));
             nextStory=stakesOutcome.story();
         } else if (isV6(state)) {
             boolean approved=currentConflict && ((state.getV6Window()!=null
@@ -1300,8 +1306,8 @@ public class PlaygroundService {
                 && state.getV6AnnualWindow().effectivePlan()!=null)
             strategy=state.getV6AnnualWindow().effectivePlan().strategy(strategy);
         V5ShopRules.MonthResult result=stakesOutcome!=null?stakesOutcome.result():shopModule(state).advance(before,strategy,signal,response,signed,
-                Set.of("0.7","0.8","0.9","1.0","1.1","1.2","1.3").contains(state.getRuleVersion()),external);
-        if (Set.of("1.1","1.2","1.3").contains(state.getRuleVersion()))
+                Set.of("0.7","0.8","0.9","1.0","1.1","1.2","1.3","1.4").contains(state.getRuleVersion()),external);
+        if (Set.of("1.1","1.2","1.3","1.4").contains(state.getRuleVersion()))
             state.setLastExecution(shopModule(state).executedPlan(before,result,
                     state.getV6AnnualWindow()==null?null:state.getV6AnnualWindow().effectivePlan(),
                     v5Strategy(state).produceUnits()));
@@ -1314,6 +1320,21 @@ public class PlaygroundService {
             eventAtMonth(activity,"CAPACITY_ORDER_MONTH","SYSTEM",null,"EXECUTED",
                     Map.of("delivery",stakesOutcome.delivery(),"status",state.getCapacityOrder().status().name()),
                     stakesOutcome.delivery().month());
+        }
+        if(state.getRuleVersion().equals("1.4") && stakesOutcome!=null && stakesOutcome.pressure()!=null
+                && V10CapacityPressure.rush(stakesOutcome.pressure().month())) {
+            var w=state.getV6AnnualWindow();
+            V6MonthlyPlan chosen=w!=null?w.effectivePlan():null;
+            var noOrder=new V8NegotiationStakes().advance(before,v5Strategy(state),signal,signed,pressureStoryBefore,
+                    pressureConflictBefore,chosen,null,true,true).result();
+            var accounts=new V8NegotiationStakes().accounts(before,noOrder);
+            var actual=new V8NegotiationStakes().accounts(before,stakesOutcome.result());
+            var delivery=stakesOutcome.delivery();
+            var report=new V10CapacityPressure.Report(stakesOutcome.pressure(),stakesOutcome.story().trust(),
+                    state.getV6Story().trust(),state.getV6Story().echoMonths(),delivery==null?0:delivery.penaltyMinor(),
+                    delivery==null?0:delivery.bonusMinor(),accounts.soldUnits(),accounts.profitMinor(),actual.profitMinor());
+            state.getCapacityPressureReports().add(report);
+            eventAtMonth(activity,"CAPACITY_PRESSURE_MONTH","SYSTEM",null,"EXECUTED",Map.of("report",report),report.evidence().month());
         }
         if(state.getGame().ending()!=MonthlyShopRules.Ending.RUNNING && state.getCapacityOrder()!=null
                 && state.getCapacityOrder().status()==V9CapacityOrder.Status.ACTIVE) {
@@ -1501,7 +1522,7 @@ public class PlaygroundService {
         result.set("allowedActions",json.valueToTree(taskActions));
         ObjectNode visible=json.createObjectNode().put("cashMinor",state.getGame().cashMinor()).put("virtualMonth",state.getGame().operatedMonths());
         visible.set("proposal",state.getProposal()==null?json.nullNode():state.getProposal());
-        if(state.getRuleVersion().equals("1.3")) {
+        if(Set.of("1.3","1.4").contains(state.getRuleVersion())) {
             visible.set("capacityOrder",json.valueToTree(state.getCapacityOrder()));
             visible.set("capacityOrderOffers",json.valueToTree(V9CapacityOrder.offers()));
             visible.putNull("orderWindow");
@@ -1515,6 +1536,7 @@ public class PlaygroundService {
                 visible.set("orderWindow",order);
             }
         }
+        if(state.getRuleVersion().equals("1.4")) visible.set("capacityPressure",json.valueToTree(V10CapacityPressure.forecast(state.getCapacityPressureReports())));
         if (isV6(state) && state.getGame().operatedMonths()==0)
             visible.set("foundingChoices",json.valueToTree(Map.of(
                     "totalCapitalCoins",V6FoundingAgreement.TOTAL_CAPITAL_COINS,
@@ -1597,7 +1619,7 @@ public class PlaygroundService {
                         .put("month",window.month()).put("phase",window.phase().name())
                         .put("deadline",window.deadline().toString())
                         .put("signal",state.getV5Signal().name());
-                if (enrichedContext || Set.of("1.1","1.2","1.3").contains(state.getRuleVersion())) {
+                if (enrichedContext || Set.of("1.1","1.2","1.3","1.4").contains(state.getRuleVersion())) {
                     V6FoundingAgreement founding=V6FoundingContract.parse(
                             state.getProposal().path("plan").path("foundingAgreement"));
                     V6FoundingAgreement.Seat ownSeat=task.getAgentId().equals(activity.getHostAgentId())
@@ -1610,9 +1632,9 @@ public class PlaygroundService {
                     monthly.set("optionEffects",json.valueToTree(window.conflict()==null
                             ?List.of():window.conflict().options()));
                 }
-                if (Set.of("1.1","1.2","1.3").contains(state.getRuleVersion()))
+                if (Set.of("1.1","1.2","1.3","1.4").contains(state.getRuleVersion()))
                     monthly.set("cause",json.valueToTree(state.getIncidentCause()));
-                if (Set.of("1.2","1.3").contains(state.getRuleVersion()))
+                if (Set.of("1.2","1.3","1.4").contains(state.getRuleVersion()))
                     monthly.set("unresolvedEffect",json.valueToTree(new V8NegotiationStakes().unresolved(window.conflict())));
                 monthly.set("priorReport",json.valueToTree(state.getGame().reports()
                         .get(state.getGame().reports().size()-1)));
@@ -1794,11 +1816,11 @@ public class PlaygroundService {
                 permission.getMaxAttempts());
     }
     private boolean isAnnualActivity(Activity activity) {
-        return Set.of("1.0","1.1","1.2","1.3").contains(read(activity.getStateJson(),PlaygroundRoomState.class).getRuleVersion());
+        return Set.of("1.0","1.1","1.2","1.3","1.4").contains(read(activity.getStateJson(),PlaygroundRoomState.class).getRuleVersion());
     }
-    private boolean isAnnual(PlaygroundRoomState state) { return Set.of("1.0","1.1","1.2","1.3").contains(state.getRuleVersion()); }
+    private boolean isAnnual(PlaygroundRoomState state) { return Set.of("1.0","1.1","1.2","1.3","1.4").contains(state.getRuleVersion()); }
     private boolean isV6(PlaygroundRoomState state) {
-        return Set.of("0.9","1.0","1.1","1.2","1.3").contains(state.getRuleVersion());
+        return Set.of("0.9","1.0","1.1","1.2","1.3","1.4").contains(state.getRuleVersion());
     }
     boolean requiresAnnualGrant(String mode,int contractVersion) {
         return v6Enabled && "FULL".equals(mode) && contractVersion==5;
@@ -1868,7 +1890,7 @@ public class PlaygroundService {
         PlaygroundRoomState state=read(activity.getStateJson(),PlaygroundRoomState.class);
         require((Set.of(2,3).contains(state.getContractVersion()) && state.getRuleVersion().equals("0.4"))
                 || (state.getContractVersion()==4 && state.getRuleVersion().equals("0.5"))
-                || (state.getContractVersion()==5 && Set.of("0.6","0.7","0.8","0.9","1.0","1.1","1.2","1.3").contains(state.getRuleVersion())),409,"UNSUPPORTED_RULE_VERSION");
+                || (state.getContractVersion()==5 && Set.of("0.6","0.7","0.8","0.9","1.0","1.1","1.2","1.3","1.4").contains(state.getRuleVersion())),409,"UNSUPPORTED_RULE_VERSION");
         if (state.getProposal()!=null && state.getProposal().isNull()) state.setProposal(null);
         return state;
     }

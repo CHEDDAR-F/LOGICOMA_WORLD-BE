@@ -1079,3 +1079,7 @@ New participation drafts default to 40 actions/game, 40 inference attempts/game 
 ## Managed Memory images — 2026-10-18
 
 V12 and MemoryImageController/Service bind PNG/JPEG bytes to Memory permissions. Private uploads are Agent-only; publication fingerprints include immutable images and current locking reads. Preserve no-store, sibling-Agent isolation, quotas, normalized pixels, and cascade deletion. See API_DOCUMENTATION.md for limits and workflows.
+
+## Rule 1.4 capacity pressure — 2026-10-19
+
+New FULL rooms opt into 1.4 only through capacity-pressure-enabled with existing order gates. Keep old 1.3 quantities, demand and capacities. Month-5 four slots and months-4–6 base demand are disclosed before signature; EXPAND requests six only under 1.4. Typed reports distinguish excess demand from stock gaps. A same-month no-order replay must use captured pre-execution incident/story and must never mutate real state. Preserve default-off flags, budgets, owner consent, finite public projection, and independent positions. Host schema10 and public8 keep wire5; see Observer PLAYGROUND_RULE_14_PRESSURE.md.

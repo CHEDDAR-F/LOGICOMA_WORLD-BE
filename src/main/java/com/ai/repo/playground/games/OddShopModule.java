@@ -20,7 +20,7 @@ public final class OddShopModule implements GameModule<MonthlyShopRules.State,
 
     private OddShopModule(String ruleVersion) { key = new GameKey("ODD_SHOP", ruleVersion); }
     public static GameRegistry registry() {
-        return new GameRegistry(List.of("0.4", "0.5", "0.6", "0.7", "0.8", "0.9", "1.0", "1.1", "1.2", "1.3")
+        return new GameRegistry(List.of("0.4", "0.5", "0.6", "0.7", "0.8", "0.9", "1.0", "1.1", "1.2", "1.3", "1.4")
                 .stream().map(OddShopModule::new).toList());
     }
     @Override public GameKey key() { return key; }
@@ -35,13 +35,13 @@ public final class OddShopModule implements GameModule<MonthlyShopRules.State,
     public V5ShopRules.MonthResult advance(MonthlyShopRules.State state, V5ShopRules.Strategy strategy,
             V5ShopRules.Signal signal, V5ShopRules.Response response, V5FranchiseOffer franchise,
             boolean variableDemand, MonthlyShopRules.TradingAdjustment external) {
-        boolean expectedDemand = List.of("0.7", "0.8", "0.9", "1.0", "1.1", "1.2", "1.3").contains(key.ruleVersion());
+        boolean expectedDemand = List.of("0.7", "0.8", "0.9", "1.0", "1.1", "1.2", "1.3", "1.4").contains(key.ruleVersion());
         if (variableDemand != expectedDemand) throw new IllegalArgumentException("GAME_RULE_VERSION_MISMATCH");
         return strategyRules.advance(state, strategy, signal, response, franchise, variableDemand, external);
     }
     public V7StoryRules.Incident nextIncident(int seed, int month, V6ConflictRules.StoryState story,
             V7StoryRules.Execution prior, boolean scheduled) {
-        if (List.of("1.1", "1.2", "1.3").contains(key.ruleVersion()))
+        if (List.of("1.1", "1.2", "1.3", "1.4").contains(key.ruleVersion()))
             return new V7StoryRules().next(seed, month, story, prior, scheduled);
         return new V7StoryRules.Incident(scheduled ? new V6ConflictRules().draw(seed, month, story) : null, null);
     }

@@ -84,7 +84,9 @@ public final class MonthlyShopRules {
     }
     public record CapacityDelivery(int month,int reservedUnits,int deliveredUnits,int regularCapacity,
             int regularSoldUnits,long revenueMinor,long penaltyMinor,long bonusMinor,boolean fulfilled) {}
-    public record CapacityTrade(State game,CapacityDelivery delivery) {}
+    public record CapacityTrade(State game,CapacityDelivery delivery,V10CapacityPressure.Evidence pressure) {
+        public CapacityTrade(State game,CapacityDelivery delivery) { this(game,delivery,null); }
+    }
     public record Batch(int units, long unitCostMinor) {}
     public record MonthlyReport(int month, long openingCashMinor, long closingCashMinor,
                                 long receiptsMinor, long paymentsMinor, long salesMinor,
@@ -138,7 +140,13 @@ public final class MonthlyShopRules {
     public CapacityTrade advanceCapacityMonth(State state,Plan plan,TradingAdjustment adjustment,CapacityReservation reservation) {
         return trade(state,plan,null,adjustment,reservation,true);
     }
+    public CapacityTrade advancePressureMonth(State state,Plan plan,TradingAdjustment adjustment,CapacityReservation reservation) {
+        return trade(state,plan,null,adjustment,reservation,true,true);
+    }
     private CapacityTrade trade(State state,Plan plan,NpcOrder order,TradingAdjustment adjustment,CapacityReservation reservation,boolean boundedCapacity) {
+        return trade(state,plan,order,adjustment,reservation,boundedCapacity,false);
+    }
+    private CapacityTrade trade(State state,Plan plan,NpcOrder order,TradingAdjustment adjustment,CapacityReservation reservation,boolean boundedCapacity,boolean pressure) {
         running(state);
         require(plan != null && adjustment != null, "INVALID_PLAN");
         int month = state.operatedMonths() + 1;
@@ -159,6 +167,7 @@ public final class MonthlyShopRules {
         long payments = fixed;
         long receipts = 0, sales = 0, cogs = 0, expense = fixed;
         int capacity = env.active(month, Shock.POWER_OUTAGE) ? 2 : 6;
+        if(pressure) capacity=V10CapacityPressure.capacity(month,capacity);
         long unitCost = (env.active(month, Shock.MATERIAL_SURGE) ? 900 : 600)
                 + adjustment.extraUnitCostMinor();
         List<Batch> stock = new ArrayList<>(state.inventory());
@@ -191,6 +200,7 @@ public final class MonthlyShopRules {
                 events.add("NPC_ORDER_FULFILLED");
             } else events.add("NPC_ORDER_UNFILLED");
         }
+        int availableUnits=stock.stream().mapToInt(Batch::units).sum();
         int contractSold=0;
         long orderRevenue=0;
         int regularCapacity=!boundedCapacity?Integer.MAX_VALUE:Math.max(0,capacity-(reservation==null?0:reservation.units()));
@@ -217,6 +227,8 @@ public final class MonthlyShopRules {
         List<Integer> buyers = new ArrayList<>();
         for (int i = 0; i < pool.size() - adjustment.lostBuyers(); i++) buyers.add(pool.get(i));
         buyers.addAll(adjustment.extraBuyerWillingnessCoins());
+        int walkInDemand=(int)buyers.stream().filter(w->w>=plan.unitPriceCoins()).count();
+        int stockAfterOrder=stock.stream().mapToInt(Batch::units).sum();
         for (int willingness : buyers) {
             if(regularSold>=regularCapacity) break;
             long packaging = env.active(month, Shock.PACKAGING_RULE) ? 200 : 0;
@@ -247,7 +259,10 @@ public final class MonthlyShopRules {
         if (month == state.horizonMonths())
             next=liquidate(next, month == 12 ? Ending.YEAR_COMPLETE : Ending.SHORT_COMPLETE, null);
         return new CapacityTrade(next,reservation==null?null:new CapacityDelivery(month,reservation.units(),
-                contractSold,regularCapacity,regularSold,orderRevenue,penalty,bonus,contractSold==reservation.units()));
+                contractSold,regularCapacity,regularSold,orderRevenue,penalty,bonus,contractSold==reservation.units()),!pressure?null:new V10CapacityPressure.Evidence(month,capacity,produced,availableUnits,
+                walkInDemand,reservation==null?0:reservation.units(),contractSold,regularCapacity,regularSold,
+                walkInDemand-regularSold,Math.max(0,walkInDemand+(reservation==null?0:reservation.units())-capacity),
+                Math.max(0,Math.min(walkInDemand,regularCapacity)-stockAfterOrder)));
     }
     public State close(State state) { running(state); return liquidate(state, Ending.ACTIVE_CLOSURE, null); }
     public Summary summary(State state) {

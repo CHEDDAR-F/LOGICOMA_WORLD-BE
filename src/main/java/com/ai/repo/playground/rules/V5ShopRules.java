@@ -63,15 +63,27 @@ public final class V5ShopRules {
                                boolean variableDemand,MonthlyShopRules.TradingAdjustment external) {
         return trade(game,strategy,signal,response,franchise,variableDemand,external,null,false).month();
     }
-    public record CapacityMonth(MonthResult month,MonthlyShopRules.CapacityDelivery delivery) {}
+    public record CapacityMonth(MonthResult month,MonthlyShopRules.CapacityDelivery delivery,V10CapacityPressure.Evidence pressure) {
+        public CapacityMonth(MonthResult month,MonthlyShopRules.CapacityDelivery delivery) { this(month,delivery,null); }
+    }
     public CapacityMonth advanceWithCapacity(MonthlyShopRules.State game,Strategy strategy,Signal signal,
             Response response,V5FranchiseOffer franchise,boolean variableDemand,
             MonthlyShopRules.TradingAdjustment external,MonthlyShopRules.CapacityReservation reservation) {
         return trade(game,strategy,signal,response,franchise,variableDemand,external,reservation,true);
     }
+    public CapacityMonth advanceWithPressure(MonthlyShopRules.State game,Strategy strategy,Signal signal,
+            Response response,V5FranchiseOffer franchise,boolean variableDemand,
+            MonthlyShopRules.TradingAdjustment external,MonthlyShopRules.CapacityReservation reservation) {
+        return trade(game,strategy,signal,response,franchise,variableDemand,external,reservation,true,true);
+    }
     private CapacityMonth trade(MonthlyShopRules.State game,Strategy strategy,Signal signal,
             Response response,V5FranchiseOffer franchise,boolean variableDemand,
             MonthlyShopRules.TradingAdjustment external,MonthlyShopRules.CapacityReservation reservation,boolean boundedCapacity) {
+        return trade(game,strategy,signal,response,franchise,variableDemand,external,reservation,boundedCapacity,false);
+    }
+    private CapacityMonth trade(MonthlyShopRules.State game,Strategy strategy,Signal signal,
+            Response response,V5FranchiseOffer franchise,boolean variableDemand,
+            MonthlyShopRules.TradingAdjustment external,MonthlyShopRules.CapacityReservation reservation,boolean boundedCapacity,boolean pressure) {
         require(game != null && strategy != null && signal != null && response != null,
                 "INVALID_V5_MONTH");
         require(external != null,"INVALID_V5_MONTH");
@@ -159,11 +171,18 @@ public final class V5ShopRules {
                         ? (signal==Signal.MARKET_SHIFT
                             ? List.of(10,10,12,12,14,26) : List.of(10,12,14,15,28,34))
                         : List.of());
-        MonthlyShopRules.CapacityTrade capacity=!boundedCapacity?null:ledger.advanceCapacityMonth(game,plan,adjustment,reservation);
+        if(pressure && V10CapacityPressure.rush(month)) {
+            // The announced rush replaces the ordinary street pulse, not incident or trust effects.
+            adjustment=new MonthlyShopRules.TradingAdjustment(adjustment.extraExpenseMinor(),adjustment.extraUnitCostMinor(),
+                    adjustment.extraBuyerWillingnessCoins(),Math.min(4,external.lostBuyers()+(franchise==null?0:franchise.lostBuyers(month))),
+                    adjustment.eventCode(),List.of("DISTRICT_RUSH"),List.of(20,20,20,20,20,20));
+        }
+        MonthlyShopRules.CapacityTrade capacity=pressure?ledger.advancePressureMonth(game,plan,adjustment,reservation):
+                !boundedCapacity?null:ledger.advanceCapacityMonth(game,plan,adjustment,reservation);
         MonthlyShopRules.State next = capacity==null?ledger.advanceMonth(game, plan, null, adjustment):capacity.game();
         boolean failedToOpen = next.failedOpeningMonth() != null;
         return new CapacityMonth(new MonthResult(next, response, failedToOpen ? 0 : standingCost + decisionCost,
-                failedToOpen ? 0 : extraBuyers.size(), guard),capacity==null?null:capacity.delivery());
+                failedToOpen ? 0 : extraBuyers.size(), guard),capacity==null?null:capacity.delivery(),capacity==null?null:capacity.pressure());
     }
 
     private static int footfallPulse(int seed,int month) {

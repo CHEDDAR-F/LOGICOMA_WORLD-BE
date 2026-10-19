@@ -405,12 +405,31 @@ class PlaygroundPersistenceTest {
         return verifyAnnualRoom(leaveDuringReview,failDuringReview,storyVersion,stakesVersion,false);
     }
     long verifyAnnualRoom(boolean leaveDuringReview,boolean failDuringReview,boolean storyVersion,boolean stakesVersion,boolean ordersVersion) throws Exception {
+        return verifyAnnualRoom(leaveDuringReview,failDuringReview,storyVersion,stakesVersion,ordersVersion,false);
+    }
+    @Test void v10PressurePersistsAndPublicProjectionRejectsNestedNotes() throws Exception {
+        orderMode="LARGE";long id=verifyAnnualRoom(false,false,true,true,true,true);
+        var view=service.ownerActivity(1,id);assertEquals("1.4",view.path("ruleVersion").asText());
+        assertEquals(3,view.path("capacityPressure").path("reports").size());
+        var shares=context.getBean(PlaygroundShareService.class);var link=shares.ownerResultLink(1,id);
+        assertEquals(8,link.path("result").path("shareSchemaVersion").asInt());
+        assertEquals(json.readTree(view.path("capacityPressure").toString()),link.path("result").path("business").path("capacityPressure"));
+        var row=store.share(id);String original=row.getPayloadJson();ObjectNode unsafe=(ObjectNode)json.readTree(original);
+        ((ObjectNode)unsafe.path("business").path("capacityPressure").path("reports").get(0).path("evidence")).put("privateNote","canary");
+        row.setPayloadJson(json.writeValueAsString(unsafe));store.saveShare(row);
+        businessError("SHARE_NOT_FOUND",()->shares.publicResult(row.getPublicToken()));
+        row.setPayloadJson(original);store.saveShare(row);
+        Files.writeString(Path.of("target/playground-v10-tasks.json"),json.writeValueAsString(capacityTasks));
+        Files.writeString(Path.of("target/playground-v10-pressure.public.json"),json.writerWithDefaultPrettyPrinter().writeValueAsString(link.path("result")));
+    }
+    long verifyAnnualRoom(boolean leaveDuringReview,boolean failDuringReview,boolean storyVersion,boolean stakesVersion,boolean ordersVersion,boolean pressureVersion) throws Exception {
         service=new PlaygroundService(store,context.getBean(AgentMapper.class),
                 context.getBean(UserMapper.class),json,true,true,false,true,clock);
         org.springframework.test.util.ReflectionTestUtils.setField(service,"enrichedContext",true);
         org.springframework.test.util.ReflectionTestUtils.setField(service,"storyEnabled",storyVersion);
         org.springframework.test.util.ReflectionTestUtils.setField(service,"stakesEnabled",stakesVersion);
         org.springframework.test.util.ReflectionTestUtils.setField(service,"ordersEnabled",ordersVersion);
+        org.springframework.test.util.ReflectionTestUtils.setField(service,"capacityPressureEnabled",pressureVersion);
         enable(1); enable(2);
         businessError("ANNUAL_PARTICIPATION_GRANT_REQUIRED",()->service.invite(1,
                 new Invitation(1L,2L,"FULL",v5Brief("cats"))));
@@ -420,7 +439,7 @@ class PlaygroundPersistenceTest {
                 .get("activityId").toString());
         service.acceptInvitation(2,id,new InvitationAccept(v5Brief("dogs")));
         service.join(1,id); service.join(2,id);
-        assertEquals(ordersVersion?"1.3":stakesVersion?"1.2":storyVersion?"1.1":"1.0",service.ownerActivity(1,id).path("ruleVersion").asText());
+        assertEquals(pressureVersion?"1.4":ordersVersion?"1.3":stakesVersion?"1.2":storyVersion?"1.1":"1.0",service.ownerActivity(1,id).path("ruleVersion").asText());
         ObjectNode first=ready(1), opening=proposal(6,20);
         ObjectNode openingPlan=(ObjectNode)opening.path("payload").path("proposal").path("plan");
         openingPlan.set("venture",venture()); openingPlan.set("strategy",v5Strategy());
@@ -449,7 +468,7 @@ class PlaygroundPersistenceTest {
             // A restart with the new-room switch off must preserve the saved rules and task context.
             service=new PlaygroundService(store,context.getBean(AgentMapper.class),
                     context.getBean(UserMapper.class),json,true,true,false,false,clock);
-            assertEquals(ordersVersion?"1.3":stakesVersion?"1.2":"1.1",service.ownerActivity(1,id).path("ruleVersion").asText());
+            assertEquals(pressureVersion?"1.4":ordersVersion?"1.3":stakesVersion?"1.2":"1.1",service.ownerActivity(1,id).path("ruleVersion").asText());
         }
         int meetings=0;
         while (service.ownerActivity(1,id).path("status").asText().equals("PLANNING")
@@ -633,9 +652,9 @@ class PlaygroundPersistenceTest {
         JsonNode publicResult=link.path("result");
         String sharePath=link.path("sharePath").asText();
         String token=sharePath.substring(sharePath.indexOf("/shares/")+8,sharePath.indexOf("/landing"));
-        assertEquals(ordersVersion?7:stakesVersion?6:5,shares.publicResult(token).path("shareSchemaVersion").asInt());
+        assertEquals(pressureVersion?8:ordersVersion?7:stakesVersion?6:5,shares.publicResult(token).path("shareSchemaVersion").asInt());
         assertEquals(2,shares.publicResult(token).path("partnerReviews").size());
-        assertEquals(ordersVersion?7:stakesVersion?6:5,publicResult.path("shareSchemaVersion").asInt());
+        assertEquals(pressureVersion?8:ordersVersion?7:stakesVersion?6:5,publicResult.path("shareSchemaVersion").asInt());
         assertEquals(2,publicResult.path("partnerReviews").size());
         assertEquals(failDuringReview?"UNAVAILABLE":"RECORDED",
                 publicResult.path("partnerReviews").get(0).path("status").asText());
@@ -1291,7 +1310,7 @@ class PlaygroundPersistenceTest {
         long version=service.participation(actor,actor).getVersion();
         ObjectNode task=service.claim(actor,id,new Claim(version));
         ObjectNode result=service.startAttempt(actor,id,new AttemptStart(task.get("leaseToken").asText(),version,UUID.randomUUID().toString()));
-        if(result.path("ruleVersion").asText().equals("1.3")) {
+        if(Set.of("1.3","1.4").contains(result.path("ruleVersion").asText())) {
             ObjectNode sanitized=result.deepCopy();sanitized.put("leaseToken","local-test-redacted");capacityTasks.add(sanitized);
         }
         return result;
