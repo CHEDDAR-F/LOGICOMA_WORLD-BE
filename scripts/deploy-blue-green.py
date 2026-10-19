@@ -68,6 +68,12 @@ class Release:
         self.routed = self.stopped = self.promoted = False
         self.created = False
 
+    def event(self, phase):
+        item = {'phase': phase, 'at': datetime.datetime.now(datetime.timezone.utc).isoformat()}
+        with (self.release / 'events.jsonl').open('a') as stream:
+            stream.write(json.dumps(item) + '\n'); stream.flush(); os.fsync(stream.fileno())
+        print(json.dumps(item), flush=True)
+
     def health(self, port):
         try:
             paths=['/actuator/health']
@@ -113,6 +119,7 @@ class Release:
         import socket
         with socket.socket() as probe:
             probe.bind(('172.17.0.1', self.port))
+        self.previous_metadata = (self.root/'active-release.json').read_bytes() if (self.root/'active-release.json').exists() else None
         self.original = self.config.read_text()
         self.new_config = route_config(self.original, self.old_port, self.port)
         self.wait_health(self.old_port, 5)
@@ -123,6 +130,7 @@ class Release:
         if any('\n' in value for value in env): raise RuntimeError('Unsupported multiline runtime environment')
         (self.release / 'runtime.env').write_text('\n'.join(env) + '\n')
         self.backup_database()
+        self.event('preflight-complete')
 
     def backup_database(self):
         directory = Path('/opt/backups'); directory.mkdir(exist_ok=True); directory.chmod(0o700)
@@ -160,6 +168,7 @@ class Release:
         self.wait_health(self.port,self.args.startup_timeout)
         if self.marker.exists(): raise RuntimeError('Candidate activated before traffic drain')
         run('docker','exec','nginx','nginx','-t')
+        self.event('candidate-ready')
 
     def write_config(self, content):
         # Keep the bind-mounted file inode; replacing the file leaves nginx on its old inode.
@@ -180,6 +189,7 @@ class Release:
         # Roll back even when syntax validation or reload fails.
         run('docker','exec','nginx','nginx','-t')
         run('docker','exec','nginx','nginx','-s','reload')
+        self.event('traffic-routed-passive')
         end = time.monotonic() + 20
         # Old workers finish their in-flight requests. New workers queue behind the passive gate.
         while old_workers & self.nginx_workers():
@@ -190,7 +200,10 @@ class Release:
         run('docker','rename','logicomanet-be',self.previous)
         run('docker','rename',self.name,'logicomanet-be'); self.promoted = True
         # Old process is now stopped, including schedulers and process-local publication locks.
+        self.event('old-writer-stopped')
+        time.sleep(getattr(self.args, 'activation_delay', 0))
         self.marker.touch(exist_ok=False)
+        self.event('candidate-active')
         self.wait_health(self.port, 5)
         # Same public read path as real clients, through the new nginx worker generation.
         for path, expected in [('/actuator/health',200),('/api/agents/me',401)]:
@@ -204,7 +217,9 @@ class Release:
         installer.replace(self.root/'deploy-blue-green.py')
         (self.root/'active-release.json').write_text(json.dumps({'release':self.args.revision,
             'port':self.port,'directory':str(self.release),'previousContainer':self.previous,
-            'candidateSha256':self.args.candidate,'backup':str(self.backup)},indent=2))
+            'candidateSha256':self.args.candidate,'backup':str(self.backup),
+            'operation':'rollback' if getattr(self.args,'rollback',False) else 'release'},indent=2))
+        self.event('committed')
         print(json.dumps({'result':'healthy','release':self.args.revision,'port':self.port,
                           'previousContainer':self.previous,'databaseBackup':str(self.backup)}))
 
@@ -230,6 +245,11 @@ class Release:
             run('docker','exec','nginx','nginx','-s','reload')
         if self.created:
             run('docker','rm','-f',self.candidate_id)
+        metadata = self.root/'active-release.json'
+        if self.previous_metadata is None:
+            metadata.unlink(missing_ok=True)
+        else:
+            metadata.write_bytes(self.previous_metadata)
 
     def deploy(self):
         self.preflight()
@@ -241,11 +261,47 @@ class Release:
             raise
 
 
+def prepare_rollback(args, root):
+    """Prepare an ordinary passive handoff to the previous compatible artifact. Never restore DB."""
+    root = root.resolve()
+    destination = Path(args.release).resolve()
+    if destination.parent != root / 'releases' or not re.fullmatch(r'[A-Za-z0-9-]+', destination.name):
+        raise RuntimeError('Rollback requires a new direct release child')
+    if destination.exists(): raise RuntimeError('Rollback destination already exists')
+    active = json.loads((root / 'active-release.json').read_text())
+    previous = Path(active['directory']).resolve()
+    if previous.parent != root / 'releases': raise RuntimeError('Invalid active release directory')
+    if digest(root/'app.jar') != active['candidateSha256']:
+        raise RuntimeError('Active artifact differs from release metadata')
+    artifact = previous / 'previous.jar'
+    with zipfile.ZipFile(artifact) as jar:
+        if 'BOOT-INF/classes/com/ai/repo/release/ReleaseGateFilter.class' not in jar.namelist():
+            raise RuntimeError('Rollback target predates passive gate; requires separate recovery plan')
+    if migration_fingerprints(root/'app.jar') != migration_fingerprints(artifact):
+        raise RuntimeError('Rollback target changes schema; cannot restore live database')
+    snapshot = json.loads((previous/'previous-container.json').read_text())[0]
+    revision = (snapshot['Config'].get('Labels') or {}).get('com.logicoma.release')
+    if not revision or not re.fullmatch(r'[0-9a-f]{40}', revision):
+        raise RuntimeError('Rollback source revision missing')
+    args.expected = active['candidateSha256']; args.candidate = digest(artifact); args.revision = revision
+    destination.mkdir(mode=0o700)
+    shutil.copy2(artifact,destination/'candidate.jar')
+    (destination/'rollback-source.json').write_text(json.dumps({'from':active['release'],
+        'to':revision,'targetSha256':args.candidate,'databaseRestore':False},indent=2))
+
+
 def main():
     parser=argparse.ArgumentParser(description=__doc__)
-    parser.add_argument('release');parser.add_argument('expected');parser.add_argument('candidate');parser.add_argument('revision')
+    parser.add_argument('release')
+    for name in ['expected','candidate','revision']: parser.add_argument(name,nargs='?')
+    parser.add_argument('--rollback',action='store_true',help='Warm and hand off to previous gated same-schema artifact; never restore DB')
     parser.add_argument('--startup-timeout',type=int,default=180)
+    parser.add_argument('--activation-delay',type=float,default=0,
+                        help='Root-only acceptance observation window, 0 to 3 seconds; requests remain passive')
     args=parser.parse_args()
+    if not 0 <= args.activation_delay <= 3: parser.error('activation-delay must be between 0 and 3 seconds')
+    if args.rollback and any([args.expected,args.candidate,args.revision]): parser.error('rollback derives fingerprints and source revision from active metadata')
+    if not args.rollback and not all([args.expected,args.candidate,args.revision]): parser.error('release needs expected, candidate and revision')
     if os.geteuid()!=0: raise SystemExit('Run as root; runtime secrets remain on server')
     import signal
     def interrupted(signum, frame): raise SystemExit(128+signum)
@@ -255,9 +311,10 @@ def main():
     locks=[]
     for path in ['/opt/logicomanet-be/deploy.lock','/opt/logicomanet-fe/deploy.lock']:
         lock=open(path,'a');fcntl.flock(lock,fcntl.LOCK_EX|fcntl.LOCK_NB);locks.append(lock)
-    try: Release(args).deploy()
+    try:
+        if args.rollback: prepare_rollback(args,Path('/opt/logicomanet-be'))
+        Release(args).deploy()
     except BaseException as error:
-        # No subprocess command/env details or private Docker metadata in client logs.
         print('Release failed safely: '+type(error).__name__+': '+str(error) if not isinstance(error,subprocess.CalledProcessError) else 'Release failed safely: subprocess error',flush=True)
         raise SystemExit(1)
 
