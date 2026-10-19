@@ -14,6 +14,7 @@ public class PlaygroundExpiryScheduler {
     public PlaygroundExpiryScheduler(PlaygroundService service) { this.service=service; }
     @Scheduled(fixedDelayString="${playground.expiry-scan-ms:60000}")
     public void expire() {
+        if (!com.ai.repo.release.ReleaseActivation.isActive()) return;
         for (long id:service.expiredActivityIds()) {
             try { service.expire(id); }
             catch (Exception error) { log.warn("Playground expiry failed for activity {} ({})",id,error.getClass().getSimpleName()); }

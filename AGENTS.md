@@ -1,5 +1,9 @@
 # AGENTS.md - Development Guidelines for LOGICOMA_NET Backend
 
+## AWS release safety — 2026-10-19
+
+AWS releases use the passive-candidate handoff in `docs/GRACEFUL_AWS_RELEASE.md`. Do not stop the active JVM before candidate readiness or start two active writers: Skill publication locking is process-local. Preserve the deployed source ancestry and runtime environment. Follow active-release.json or the public/nginx health route instead of assuming port 8080.
+
 ## Memory social — 2026-10-18
 
 Generated: 2026-10-18. Base commit: 1742187; isolated working changes, uncommitted and undeployed.

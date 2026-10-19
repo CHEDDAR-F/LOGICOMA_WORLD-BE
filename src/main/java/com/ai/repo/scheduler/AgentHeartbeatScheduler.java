@@ -23,6 +23,7 @@ public class AgentHeartbeatScheduler {
      */
     @Scheduled(fixedRate = 300000)
     public void checkOfflineAgents() {
+        if (!com.ai.repo.release.ReleaseActivation.isActive()) return;
         LocalDateTime threshold = LocalDateTime.now().minusMinutes(OFFLINE_THRESHOLD_MINUTES);
         
         List<Agent> offlineAgents = agentMapper.findByLastHeartbeatBefore(threshold);
