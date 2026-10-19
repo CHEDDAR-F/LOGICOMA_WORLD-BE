@@ -3,6 +3,8 @@ import importlib.util
 from pathlib import Path
 import tempfile
 import io
+import argparse
+import json
 import unittest
 from unittest.mock import patch
 import zipfile
@@ -49,6 +51,40 @@ class DeploymentSafety(unittest.TestCase):
             release.write_config('original')
             self.assertEqual(release.config.stat().st_ino,inode)
             self.assertEqual(release.config.read_text(),'original')
+    def rollback_fixture(self, directory, gated=True, changed_schema=False):
+        root=Path(directory); (root/'releases'/'active').mkdir(parents=True)
+        active=root/'releases'/'active'
+        for path, gate, sql in [(root/'app.jar', True, 'SELECT 1'),(active/'previous.jar',gated,'SELECT 2' if changed_schema else 'SELECT 1')]:
+            with zipfile.ZipFile(path,'w') as jar:
+                jar.writestr('BOOT-INF/classes/db/migration/V1.sql',sql)
+                if gate: jar.writestr('BOOT-INF/classes/com/ai/repo/release/ReleaseGateFilter.class',b'gate')
+        (root/'active-release.json').write_text(json.dumps({'directory':str(active),'release':'b'*40,'candidateSha256':r.digest(root/'app.jar')}))
+        (active/'previous-container.json').write_text(json.dumps([{'Config':{'Labels':{'com.logicoma.release':'a'*40}}}]))
+        return root,argparse.Namespace(release=str(root/'releases'/'rollback'))
+
+    def test_planned_rollback_uses_previous_artifact_and_never_restores_database(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root,args=self.rollback_fixture(directory)
+            r.prepare_rollback(args,root)
+            self.assertEqual(args.revision,'a'*40)
+            self.assertEqual(r.digest(Path(args.release)/'candidate.jar'),r.digest(root/'releases'/'active'/'previous.jar'))
+            self.assertFalse(json.loads((Path(args.release)/'rollback-source.json').read_text())['databaseRestore'])
+            self.assertEqual(json.loads((root/'active-release.json').read_text())['release'],'b'*40)
+
+    def test_rollback_refuses_pre_gate_artifacts_before_creating_destination(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root,args=self.rollback_fixture(directory,gated=False)
+            with self.assertRaisesRegex(RuntimeError,'predates passive gate'):r.prepare_rollback(args,root)
+            self.assertFalse(Path(args.release).exists())
+
+    def test_rollback_refuses_schema_change_and_stale_current_artifact(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root,args=self.rollback_fixture(directory,changed_schema=True)
+            with self.assertRaisesRegex(RuntimeError,'changes schema'):r.prepare_rollback(args,root)
+            self.assertFalse(Path(args.release).exists())
+            (root/'app.jar').write_bytes(b'other release')
+            with self.assertRaisesRegex(RuntimeError,'differs from release metadata'):r.prepare_rollback(args,root)
+
     def test_failed_candidate_never_enters_traffic_switch_and_calls_cleanup(self):
         release=object.__new__(r.Release)
         with patch.object(release,'preflight'),patch.object(release,'start_candidate',side_effect=RuntimeError('not ready')),patch.object(release,'switch') as switch,patch.object(release,'rollback') as rollback:
