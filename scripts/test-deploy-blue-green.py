@@ -2,6 +2,7 @@
 import importlib.util
 from pathlib import Path
 import tempfile
+import io
 import unittest
 from unittest.mock import patch
 import zipfile
@@ -33,6 +34,13 @@ class DeploymentSafety(unittest.TestCase):
         self.assertEqual(sum(x.startswith('--server.port=') for x in command),1)
         self.assertIn('--server.address=172.17.0.1',command)
         self.assertIn('--management.endpoint.health.probes.enabled=true',command)
+    def test_dependency_health_alone_does_not_satisfy_candidate_readiness(self):
+        release=object.__new__(r.Release);release.port=18080
+        with patch.object(r.urllib.request,'build_opener') as factory:
+            factory.return_value.open.side_effect=[io.BytesIO(b'{"status":"UP"}'),io.BytesIO(b'{"status":"OUT_OF_SERVICE"}')]
+            self.assertFalse(release.health(18080))
+            factory.return_value.open.side_effect=[io.BytesIO(b'{"status":"UP"}'),io.BytesIO(b'{"status":"UP"}')]
+            self.assertTrue(release.health(18080))
     def test_failed_syntax_restores_bind_mounted_inode_before_reload(self):
         with tempfile.TemporaryDirectory() as directory:
             release=object.__new__(r.Release);release.config=Path(directory)/'default.conf'
