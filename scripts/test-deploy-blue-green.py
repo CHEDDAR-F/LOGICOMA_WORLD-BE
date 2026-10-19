@@ -19,6 +19,26 @@ class DeploymentSafety(unittest.TestCase):
         self.assertEqual(changed.count(':18080;'),3)
         self.assertIn(':8081;',changed)
         with self.assertRaises(RuntimeError):r.route_config(original+'\nproxy_pass http://172.17.0.1:8080;',8080,18080)
+    def test_only_exact_reviewed_receipt_table_expansion_is_allowed(self):
+        old={'BOOT-INF/classes/db/migration/V1.sql':'old'}
+        new=dict(old,**{r.COMMENT_RECEIPT_MIGRATION:r.COMMENT_RECEIPT_SHA256})
+        self.assertFalse(r.compatible_migrations(old,new))
+        self.assertTrue(r.compatible_migrations(old,new,True))
+        self.assertFalse(r.compatible_migrations(new,old,True))
+        self.assertFalse(r.compatible_migrations(old,dict(new,extra='hash'),True))
+        self.assertFalse(r.compatible_migrations(old,dict(new,**{r.COMMENT_RECEIPT_MIGRATION:'changed'}),True))
+        self.assertFalse(r.compatible_migrations(old,dict(new,**{'BOOT-INF/classes/db/migration/V1.sql':'changed'}),True))
+        migration=Path(__file__).parent.parent/'src/main/resources/db/migration/V13__add_comment_create_requests.sql'
+        self.assertEqual(r.digest(migration),r.COMMENT_RECEIPT_SHA256)
+
+    def test_activated_receipt_expansion_never_cold_recovers_pre_v13_writer(self):
+        with tempfile.TemporaryDirectory() as directory:
+            release=object.__new__(r.Release);release.receipt_expansion=True
+            release.marker=Path(directory)/'active';release.marker.touch()
+            with patch.object(release,'event') as event,patch.object(r,'run') as run:
+                with self.assertRaisesRegex(RuntimeError,'pre-V13 automatic recovery'):release.rollback()
+                run.assert_not_called();event.assert_called_once_with('unsafe-pre-v13-recovery-refused')
+
     def test_migration_change_is_detected_even_for_same_filename(self):
         with tempfile.TemporaryDirectory() as directory:
             paths=[Path(directory)/n for n in ['old.jar','new.jar']]

@@ -37,7 +37,8 @@ public class CommentController {
         if (agentId == null) throw new BusinessException(403, "Agent authentication required");
         if (comment.getMemoryId() != null) com.ai.repo.security.AgentMutationPolicy.requireCurrent(httpRequest);
         comment.setAgentId(agentId);
-        Comment createdComment = commentService.create(comment);
+        String key = httpRequest.getHeader("Idempotency-Key");
+        Comment createdComment = key == null ? commentService.create(comment) : commentService.createIdempotent(comment, key);
         return Result.ok(createdComment);
     }
 

@@ -32,6 +32,16 @@ def migration_fingerprints(path):
                 if name.startswith('BOOT-INF/classes/db/migration/') and name.endswith('.sql')}
 
 
+COMMENT_RECEIPT_MIGRATION = 'BOOT-INF/classes/db/migration/V13__add_comment_create_requests.sql'
+COMMENT_RECEIPT_SHA256 = '192246ae3cf8ae9cb5b3f9feea096abef3651bcfc8c3d17236801e7fc914a94c'
+
+def compatible_migrations(old, new, allow_receipt_expansion=False):
+    if old == new: return True
+    # One reviewed additive table only. No replacement, removal or arbitrary SQL waiver.
+    return (allow_receipt_expansion and COMMENT_RECEIPT_MIGRATION not in old
+            and new == dict(old, **{COMMENT_RECEIPT_MIGRATION: COMMENT_RECEIPT_SHA256}))
+
+
 def route_config(content, old_port, new_port):
     result, count = re.subn(r'http://172\.17\.0\.1:' + str(old_port) + r'(?=;)',
                             'http://172.17.0.1:' + str(new_port), content)
@@ -106,7 +116,10 @@ class Release:
             raise RuntimeError('Runtime capacity contract changed')
         if not any(bind.split(':')[0] == str(self.root) for bind in h['Binds']):
             raise RuntimeError('Release directory must be visible to JVM')
-        if migration_fingerprints(self.root / 'app.jar') != migration_fingerprints(self.release / 'candidate.jar'):
+        old_migrations = migration_fingerprints(self.root / 'app.jar')
+        new_migrations = migration_fingerprints(self.release / 'candidate.jar')
+        self.receipt_expansion = old_migrations != new_migrations
+        if not compatible_migrations(old_migrations, new_migrations, getattr(self.args,'allow_comment_receipt_expansion',False)):
             raise RuntimeError('Schema-changing release requires a separate compatibility review')
         with zipfile.ZipFile(self.release / 'candidate.jar') as jar:
             if 'BOOT-INF/classes/com/ai/repo/release/ReleaseGateFilter.class' not in jar.namelist():
@@ -224,6 +237,10 @@ class Release:
                           'previousContainer':self.previous,'databaseBackup':str(self.backup)}))
 
     def rollback(self):
+        if getattr(self, 'receipt_expansion', False) and self.marker.exists():
+            # New receipts may already exist. Old code ignores keys and could duplicate retried writes.
+            self.event('unsafe-pre-v13-recovery-refused')
+            raise RuntimeError('Activated V13 candidate retained; pre-V13 automatic recovery would break idempotency. Use a compatible forward fix')
         # Restore the old JVM before routing traffic back; do not replay any application request.
         if self.created:
             candidate = json.loads(run('docker','inspect',self.candidate_id))[0]
@@ -295,6 +312,7 @@ def main():
     parser.add_argument('release')
     for name in ['expected','candidate','revision']: parser.add_argument(name,nargs='?')
     parser.add_argument('--rollback',action='store_true',help='Warm and hand off to previous gated same-schema artifact; never restore DB')
+    parser.add_argument('--allow-comment-receipt-expansion',action='store_true',help='Allow only reviewed additive V13 receipt table with exact SQL hash')
     parser.add_argument('--startup-timeout',type=int,default=180)
     parser.add_argument('--activation-delay',type=float,default=0,
                         help='Root-only acceptance observation window, 0 to 3 seconds; requests remain passive')
