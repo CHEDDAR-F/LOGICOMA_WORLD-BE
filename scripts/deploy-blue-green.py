@@ -46,10 +46,12 @@ def candidate_command(cmd, jar, marker, port):
     at = cmd.index('-jar')
     jvm = [v for v in cmd[1:at] if not v.startswith('-Dlogicoma.release.activation-file=')]
     options = [v for v in cmd[at+2:] if not v.startswith(('--server.port=', '--server.address=',
-                '--server.shutdown=', '--spring.lifecycle.timeout-per-shutdown-phase='))]
+                '--server.shutdown=', '--spring.lifecycle.timeout-per-shutdown-phase=',
+                '--management.endpoint.health.probes.enabled='))]
     return ['java', *jvm, '-Dlogicoma.release.activation-file=' + str(marker), '-jar', str(jar),
             *options, '--server.port=' + str(port), '--server.address=172.17.0.1',
-            '--server.shutdown=graceful', '--spring.lifecycle.timeout-per-shutdown-phase=15s']
+            '--server.shutdown=graceful', '--spring.lifecycle.timeout-per-shutdown-phase=15s',
+            '--management.endpoint.health.probes.enabled=true']
 
 
 class Release:
@@ -68,8 +70,13 @@ class Release:
 
     def health(self, port):
         try:
-            with urllib.request.urlopen('http://172.17.0.1:' + str(port) + '/actuator/health', timeout=2) as response:
-                return json.load(response).get('status') == 'UP'
+            paths=['/actuator/health']
+            if port == self.port: paths.append('/actuator/health/readiness')
+            opener=urllib.request.build_opener(urllib.request.ProxyHandler({}))
+            for path in paths:
+                with opener.open('http://172.17.0.1:' + str(port) + path, timeout=2) as response:
+                    if json.load(response).get('status') != 'UP': return False
+            return True
         except Exception:
             return False
 
