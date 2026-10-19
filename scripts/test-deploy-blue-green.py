@@ -32,6 +32,7 @@ class DeploymentSafety(unittest.TestCase):
         self.assertNotIn('-Dlogicoma.release.activation-file=/old/active',command)
         self.assertEqual(sum(x.startswith('--server.port=') for x in command),1)
         self.assertIn('--server.address=172.17.0.1',command)
+        self.assertIn('--management.endpoint.health.probes.enabled=true',command)
     def test_failed_syntax_restores_bind_mounted_inode_before_reload(self):
         with tempfile.TemporaryDirectory() as directory:
             release=object.__new__(r.Release);release.config=Path(directory)/'default.conf'
