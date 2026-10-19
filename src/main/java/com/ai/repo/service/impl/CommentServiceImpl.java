@@ -22,6 +22,9 @@ public class CommentServiceImpl implements CommentService {
     @Resource
     private MemorySocialService memorySocialService;
 
+    @Resource
+    private com.ai.repo.mapper.CommentCreateRequestMapper commentCreateRequestMapper;
+
     private void validateContent(String content) {
         if (content == null || content.isBlank() || content.length() > 10000)
             throw new BusinessException(400, "Comment must contain 1 to 10000 characters");
@@ -30,11 +33,49 @@ public class CommentServiceImpl implements CommentService {
     @Override
     @Transactional
     public Comment create(Comment comment) {
+        return createInternal(comment, null);
+    }
+
+    @Override
+    @Transactional
+    public Comment createIdempotent(Comment comment, String idempotencyKey) {
+        if (idempotencyKey == null || !idempotencyKey.matches("[A-Za-z0-9][A-Za-z0-9._:-]{0,127}"))
+            throw new BusinessException(400, "Idempotency-Key must contain 1 to 128 ASCII letters, digits, dot, underscore, colon or hyphen");
+        return createInternal(comment, idempotencyKey);
+    }
+
+    private static String sha256(String value) {
+        try {
+            return java.util.HexFormat.of().formatHex(java.security.MessageDigest.getInstance("SHA-256")
+                .digest(value.getBytes(java.nio.charset.StandardCharsets.UTF_8)));
+        } catch (java.security.NoSuchAlgorithmException impossible) { throw new IllegalStateException(impossible); }
+    }
+
+    private Comment createInternal(Comment comment, String key) {
         validateContent(comment.getContent());
         if ((comment.getMemoryId() == null) == (comment.getRepoId() == null))
             throw new BusinessException(400, "Specify exactly one comment target");
         if (comment.getAgentId() == null) throw new BusinessException(403, "Agent authentication required");
         if (comment.getMemoryId() != null) memorySocialService.requirePublic(comment.getMemoryId(), true);
+        com.ai.repo.entity.CommentCreateRequest receipt = null;
+        if (key != null) {
+            receipt = new com.ai.repo.entity.CommentCreateRequest();
+            receipt.setAgentId(comment.getAgentId());
+            receipt.setRequestKeyHash(sha256(key));
+            receipt.setRequestHash(sha256("comment-create:v1\n" + comment.getRepoId() + "\n" + comment.getMemoryId()
+                + "\n" + comment.getParentId() + "\n" + comment.getContent()));
+            receipt.setClaimToken(UuidUtil.generate());
+            commentCreateRequestMapper.claim(receipt);
+            var stored = commentCreateRequestMapper.locked(receipt);
+            if (!Objects.equals(stored.getRequestHash(), receipt.getRequestHash()))
+                throw new BusinessException(409, "Idempotency-Key was already used for a different comment request");
+            if (!Objects.equals(stored.getClaimToken(), receipt.getClaimToken())) {
+                // Check current visibility above, then read current authorized data. Never cache a public response.
+                Comment existing = stored.getCommentId() == null ? null : commentMapper.selectById(stored.getCommentId());
+                if (existing == null) throw new BusinessException(410, "Comment for this Idempotency-Key is no longer available");
+                return existing;
+            }
+        }
         Comment parent = null;
         if (comment.getParentId() != null) {
             parent = commentMapper.selectById(comment.getParentId());
@@ -49,10 +90,14 @@ public class CommentServiceImpl implements CommentService {
         comment.setDownvoteCount(0);
         commentMapper.insert(comment);
         if (parent != null) {
-            parent.setReplyCount((parent.getReplyCount() == null ? 0 : parent.getReplyCount()) + 1);
-            commentMapper.update(parent);
+            commentMapper.incrementReplyCount(parent.getId());
         }
 
+        if (receipt != null) {
+            receipt.setCommentId(comment.getId());
+            if (commentCreateRequestMapper.complete(receipt) != 1)
+                throw new IllegalStateException("Comment creation receipt was not completed");
+        }
         return comment;
     }
 

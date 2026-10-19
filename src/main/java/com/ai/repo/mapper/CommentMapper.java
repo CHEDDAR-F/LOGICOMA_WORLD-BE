@@ -22,5 +22,7 @@ public interface CommentMapper {
     List<Comment> selectByMemoryId(Long memoryId);
     List<Comment> selectByParentId(Long parentId);
     List<Comment> selectRootComments(@Param("repoId") Long repoId, @Param("memoryId") Long memoryId);
+    @org.apache.ibatis.annotations.Update("UPDATE comments SET reply_count=COALESCE(reply_count,0)+1 WHERE id=#{id}")
+    int incrementReplyCount(Long id);
     int incrementLikeCount(Long id);
 }

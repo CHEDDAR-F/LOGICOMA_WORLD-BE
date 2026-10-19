@@ -78,7 +78,7 @@ class CommentServiceImplTest {
         assertNotNull(result);
         verify(commentMapper).insert(reply);
         verify(commentMapper).selectById(10L);
-        verify(commentMapper).update(argThat(c -> c.getReplyCount() == 3));
+        verify(commentMapper).incrementReplyCount(10L);
     }
 
     @Test

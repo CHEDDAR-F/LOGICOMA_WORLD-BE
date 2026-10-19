@@ -18,10 +18,12 @@ REUSE_REMOTE_ENV=false
 PREFLIGHT_ONLY=false
 RUNTIME_DOCKER_ARGS=""
 RUNTIME_JAVA_ARGS=""
+COMMENT_RECEIPT_EXPANSION=""
 
 while [[ $# -gt 0 ]]; do
   case $1 in
     --target=*) TARGET="${1#*=}"; shift ;;
+    --allow-comment-receipt-expansion) COMMENT_RECEIPT_EXPANSION="--allow-comment-receipt-expansion"; shift ;;
     --skip-build) SKIP_BUILD=true; shift ;;
     --no-backup) NO_BACKUP=true; shift ;;
     --self-audit) SELF_AUDIT=true; shift ;;
@@ -63,6 +65,10 @@ select_server() {
   esac
 }
 select_server
+if [ -n "$COMMENT_RECEIPT_EXPANSION" ] && [ "$TARGET" != aws ]; then
+  echo "Comment receipt expansion is supported only by the AWS passive handoff" >&2
+  exit 1
+fi
 if [ "$PREFLIGHT_ONLY" = true ]; then
   [ "$SKIP_BUILD" = false ] || { echo "Preflight requires a fresh build" >&2; exit 1; }
   [ "$NO_BACKUP" = false ] || { echo "Preflight cannot waive database backup" >&2; exit 1; }
@@ -266,7 +272,7 @@ if [ "$TARGET" = aws ]; then
   ssh_cmd "${SSH_USER}@${SERVER_IP}" "sudo mkdir '$RELEASE_DIR' && sudo chown '$SSH_USER' '$RELEASE_DIR' && chmod 700 '$RELEASE_DIR'"
   scp_cmd "$LOCAL_JAR" "${SSH_USER}@${SERVER_IP}:${RELEASE_DIR}/candidate.jar" || err "Artifact upload failed"
   scp_cmd scripts/deploy-blue-green.py "${SSH_USER}@${SERVER_IP}:${RELEASE_DIR}/deploy-blue-green.py" || err "Release tool upload failed"
-  ssh_cmd "${SSH_USER}@${SERVER_IP}" "sudo python3 '$RELEASE_DIR/deploy-blue-green.py' '$RELEASE_DIR' '$EXPECTED' '$CANDIDATE' '$REVISION'" \
+  ssh_cmd "${SSH_USER}@${SERVER_IP}" "sudo python3 '$RELEASE_DIR/deploy-blue-green.py' '$RELEASE_DIR' '$EXPECTED' '$CANDIDATE' '$REVISION' $COMMENT_RECEIPT_EXPANSION" \
     || err "AWS handoff failed; inspect server-local release evidence"
   ok "AWS passive-candidate release completed"
   exit 0

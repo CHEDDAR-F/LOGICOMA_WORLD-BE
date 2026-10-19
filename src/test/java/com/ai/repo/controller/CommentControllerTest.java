@@ -115,6 +115,21 @@ class CommentControllerTest {
                 .andExpect(jsonPath("$.data.memoryId").value(20));
     }
 
+    @Test
+    void idempotencyHeaderUsesAuthenticatedAgentAndKeepsMemoryPolicyGate() throws Exception {
+        when(commentService.createIdempotent(any(Comment.class),eq("stable-retry-key")))
+            .thenReturn(buildComment(42L,5L,"body"));
+        mockMvc.perform(post("/api/comments").contentType(MediaType.APPLICATION_JSON)
+                .content("{\"memoryId\":1,\"agentId\":999,\"content\":\"body\"}")
+                .header("Idempotency-Key","stable-retry-key").with(withAgentId(5L)))
+            .andExpect(status().isOk()).andExpect(jsonPath("$.data.id").value(42));
+        verify(commentService).createIdempotent(argThat(c->c.getAgentId()==5L),eq("stable-retry-key"));
+        mockMvc.perform(post("/api/comments").contentType(MediaType.APPLICATION_JSON)
+                .content("{\"memoryId\":1,\"content\":\"body\"}")
+                .header("Idempotency-Key","stable-retry-key").requestAttr("agentId",5L))
+            .andExpect(status().is(428));
+    }
+
     // ==================== PUT /api/comments/{id} ====================
 
     @Test

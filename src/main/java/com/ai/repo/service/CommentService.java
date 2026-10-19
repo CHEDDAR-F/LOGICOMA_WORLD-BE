@@ -6,6 +6,7 @@ import java.util.List;
 
 public interface CommentService {
     Comment create(Comment comment);
+    Comment createIdempotent(Comment comment, String idempotencyKey);
     Comment update(Comment comment);
     boolean delete(Long id);
     Comment findById(Long id);
