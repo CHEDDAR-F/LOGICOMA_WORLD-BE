@@ -218,7 +218,7 @@ ADMIN_BOOTSTRAP_EMAILS="${ADMIN_BOOTSTRAP_EMAILS:-}"
 [ -n "$ROLLBACK" ] && { rollback "$ROLLBACK"; exit $?; }
 [ "$BACKUP_DB" = true ] && { backup_db; exit $?; }
 
-if [ "$REUSE_REMOTE_ENV" = true ]; then
+if [ "$REUSE_REMOTE_ENV" = true ] && [ "$TARGET" != aws ]; then
   step "Checking existing remote environment file and permissions..."
   ssh_cmd "${SSH_USER}@${SERVER_IP}" \
     "test -f '${REMOTE_DIR}/.env' && test \"\$(stat -c %a '${REMOTE_DIR}/.env')\" = 600" \
@@ -248,6 +248,27 @@ if [ "$PREFLIGHT_ONLY" = true ]; then
   bash scripts/validate-git-policy.sh range origin/main HEAD || err "Git policy failed"
   bash scripts/test-deploy-backup-gate.sh || err "Backup gate failed"
   ok "Backend preflight complete; no server changes made"
+  exit 0
+fi
+
+# AWS uses a warmed passive candidate and graceful proxy handoff. Never enter
+# the legacy stop-first path below; runtime secrets/flags are cloned on the host.
+if [ "$TARGET" = aws ]; then
+  git diff --quiet && git diff --cached --quiet || err "Commit tracked changes before release"
+  [ -z "$(git ls-files --others --exclude-standard -- src scripts deploy.sh pom.xml)" ] || err "Commit new application and release sources before deploy"
+  REVISION=$(git rev-parse HEAD)
+  CURRENT_SOURCE=$(ssh_cmd "${SSH_USER}@${SERVER_IP}" "docker inspect --format='{{index .Config.Labels \"com.logicoma.release\"}}' '${CONTAINER_NAME}'")
+  git cat-file -e "${CURRENT_SOURCE}^{commit}" 2>/dev/null && git merge-base --is-ancestor "$CURRENT_SOURCE" HEAD \
+    || err "Candidate must retain the deployed source ancestry; compose existing production changes first"
+  EXPECTED=$(ssh_cmd "${SSH_USER}@${SERVER_IP}" "sha256sum '${REMOTE_DIR}/app.jar'" | awk '{print $1}')
+  CANDIDATE=$(shasum -a 256 "$LOCAL_JAR" | awk '{print $1}')
+  RELEASE_DIR="${REMOTE_DIR}/releases/release-$(date -u +%Y%m%d%H%M%S)-${REVISION:0:12}"
+  ssh_cmd "${SSH_USER}@${SERVER_IP}" "sudo mkdir '$RELEASE_DIR' && sudo chown '$SSH_USER' '$RELEASE_DIR' && chmod 700 '$RELEASE_DIR'"
+  scp_cmd "$LOCAL_JAR" "${SSH_USER}@${SERVER_IP}:${RELEASE_DIR}/candidate.jar" || err "Artifact upload failed"
+  scp_cmd scripts/deploy-blue-green.py "${SSH_USER}@${SERVER_IP}:${RELEASE_DIR}/deploy-blue-green.py" || err "Release tool upload failed"
+  ssh_cmd "${SSH_USER}@${SERVER_IP}" "sudo python3 '$RELEASE_DIR/deploy-blue-green.py' '$RELEASE_DIR' '$EXPECTED' '$CANDIDATE' '$REVISION'" \
+    || err "AWS handoff failed; inspect server-local release evidence"
+  ok "AWS passive-candidate release completed"
   exit 0
 fi
 

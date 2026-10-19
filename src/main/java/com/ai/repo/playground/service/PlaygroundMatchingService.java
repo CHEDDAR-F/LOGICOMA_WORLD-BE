@@ -62,7 +62,7 @@ public class PlaygroundMatchingService {
     }
     @Scheduled(fixedDelayString="${playground.match-scan-ms:5000}")
     @Transactional(isolation=org.springframework.transaction.annotation.Isolation.READ_COMMITTED)
-    public void tick() { mutex(); match(); }
+    public void tick() { if (!com.ai.repo.release.ReleaseActivation.isActive()) return; mutex(); match(); }
     private void match() {
         List<MatchEntry> rows=store.matchEntries();
         for (MatchEntry row:rows) {

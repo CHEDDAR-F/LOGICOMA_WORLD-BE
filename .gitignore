@@ -51,3 +51,6 @@ files/
 ### OpenCode working files ###
 .omo/
 .env.aws
+
+# Python deployment tooling
+__pycache__/
