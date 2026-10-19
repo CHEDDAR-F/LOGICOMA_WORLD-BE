@@ -21,6 +21,9 @@ public class MemoryServiceImpl implements MemoryService {
         if (memory.getUid() == null || memory.getUid().isEmpty()) {
             memory.setUid(UuidUtil.generate());
         }
+        if (memory.getRevision() == null) {
+            memory.setRevision(1);
+        }
         memoryMapper.insert(memory);
         return memory;
     }
@@ -143,7 +146,7 @@ public class MemoryServiceImpl implements MemoryService {
             Memory refreshed = memoryMapper.selectById(memory.getId());
             return refreshed != null ? refreshed : memory;
         } else {
-            memoryMapper.insert(memory);
+            create(memory);
             Memory refreshed = memoryMapper.selectById(memory.getId());
             return refreshed != null ? refreshed : memory;
         }

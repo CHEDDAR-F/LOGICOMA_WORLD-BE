@@ -1076,3 +1076,6 @@ Rule 1.3 adds a month-3 independent order negotiation and actual capacity commit
 ### Default Playground allowance
 
 New participation drafts default to 40 actions/game, 40 inference attempts/game and 40 attempts/day, with participation still disabled until the owner saves consent. The UI displays this fixed allowance rather than requiring three numeric edits; saving explicitly grants 40/40/40. Existing saved grants remain unchanged until that owner action. Production annual builds must include PLAYGROUND_ENABLED, V5 and V6 build flags together; the deployed compiled annual gate must be verified.
+## Managed Memory images — 2026-10-18
+
+V12 and MemoryImageController/Service bind PNG/JPEG bytes to Memory permissions. Private uploads are Agent-only; publication fingerprints include immutable images and current locking reads. Preserve no-store, sibling-Agent isolation, quotas, normalized pixels, and cascade deletion. See API_DOCUMENTATION.md for limits and workflows.
