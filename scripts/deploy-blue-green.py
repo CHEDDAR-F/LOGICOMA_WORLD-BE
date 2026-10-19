@@ -191,6 +191,10 @@ class Release:
                        '-H','Host: logicomanet.com','http://127.0.0.1'+path)
             if int(code) != expected: raise RuntimeError('Post-switch proxy probe failed')
         shutil.copy2(self.release/'candidate.jar',self.root/'app.jar')
+        installer = self.root/'deploy-blue-green.py.next'
+        shutil.copy2(Path(__file__),installer)
+        installer.chmod(0o700)
+        installer.replace(self.root/'deploy-blue-green.py')
         (self.root/'active-release.json').write_text(json.dumps({'release':self.args.revision,
             'port':self.port,'directory':str(self.release),'previousContainer':self.previous,
             'candidateSha256':self.args.candidate,'backup':str(self.backup)},indent=2))
