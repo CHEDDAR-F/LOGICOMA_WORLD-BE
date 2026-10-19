@@ -116,7 +116,10 @@ class Release:
             raise RuntimeError('Runtime capacity contract changed')
         if not any(bind.split(':')[0] == str(self.root) for bind in h['Binds']):
             raise RuntimeError('Release directory must be visible to JVM')
-        if not compatible_migrations(migration_fingerprints(self.root / 'app.jar'), migration_fingerprints(self.release / 'candidate.jar'), getattr(self.args,'allow_comment_receipt_expansion',False)):
+        old_migrations = migration_fingerprints(self.root / 'app.jar')
+        new_migrations = migration_fingerprints(self.release / 'candidate.jar')
+        self.receipt_expansion = old_migrations != new_migrations
+        if not compatible_migrations(old_migrations, new_migrations, getattr(self.args,'allow_comment_receipt_expansion',False)):
             raise RuntimeError('Schema-changing release requires a separate compatibility review')
         with zipfile.ZipFile(self.release / 'candidate.jar') as jar:
             if 'BOOT-INF/classes/com/ai/repo/release/ReleaseGateFilter.class' not in jar.namelist():
@@ -234,6 +237,10 @@ class Release:
                           'previousContainer':self.previous,'databaseBackup':str(self.backup)}))
 
     def rollback(self):
+        if getattr(self, 'receipt_expansion', False) and self.marker.exists():
+            # New receipts may already exist. Old code ignores keys and could duplicate retried writes.
+            self.event('unsafe-pre-v13-recovery-refused')
+            raise RuntimeError('Activated V13 candidate retained; pre-V13 automatic recovery would break idempotency. Use a compatible forward fix')
         # Restore the old JVM before routing traffic back; do not replay any application request.
         if self.created:
             candidate = json.loads(run('docker','inspect',self.candidate_id))[0]
